@@ -16,6 +16,13 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 
 function updatePlugin( $plugin ) {
+	if ( ! $plugin instanceof Plugin ) {
+		return;
+	}
+
+	if ( ! method_exists( $plugin, 'getPluginFile' ) || ! method_exists( $plugin, 'getPluginVersion' ) || ! method_exists( $plugin, 'getPluginName' ) ) {
+		return;
+	}
 
 	if ( ! class_exists( 'PixelYourSite\Plugin_Updater' ) ) {
 		require_once 'class-plugin-updater.php';
