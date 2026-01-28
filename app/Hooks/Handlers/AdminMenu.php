@@ -609,6 +609,7 @@ class AdminMenu
 
         $data = array(
             'images_url'                          => fluentCrmMix('images'),
+            'assets_url'                          => FluentCrm('url.assets'),
             'ajaxurl'                             => admin_url('admin-ajax.php'),
             'slug'                                => FLUENTCRM,
             'rest'                                => $this->getRestInfo($app),
