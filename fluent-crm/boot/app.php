@@ -31,7 +31,7 @@ return function ($file) {
         if (defined('FLUENTCAMPAIGN')) {
             add_filter('fluent_crm/dashboard_notices', function ($notices) {
                 if (version_compare(FLUENTCRM_MIN_PRO_VERSION, FLUENTCAMPAIGN_PLUGIN_VERSION, '>')) {
-                    $updateUrl = admin_url('plugins.php?s=fluentcampaign-pro&plugin_status=all&fluentcrm_pro_check_update=' . time());
+                    $updateUrl = admin_url('plugins.php?s=fluent-crm&plugin_status=all&fluentcrm_pro_check_update=' . time());
                     $notices[] = '<div style="padding: 15px 10px;" class="updated"><b>Heads UP: </b> FluentCRM Pro needs to be updated to the latest version. <a href="' . esc_url($updateUrl) . '">Click here to update</a></div>';
                 }
                 return $notices;

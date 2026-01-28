@@ -65,14 +65,15 @@ function fluentCampaignProDeactivate()
 }
 
 register_activation_hook(
-    __FILE__, array('FluentCampaign\App\Migration\Migrate', 'run')
+    FLUENTCRM_MAIN_FILE,
+    array('FluentCampaign\App\Migration\Migrate', 'run')
 );
 
-register_deactivation_hook(__FILE__, 'fluentCampaignProDeactivate');
+register_deactivation_hook(FLUENTCRM_MAIN_FILE, 'fluentCampaignProDeactivate');
 
 // Handle Newtwork new Site Activation
 add_action('wp_insert_site', function ($new_site) {
-    if (is_plugin_active_for_network('fluentcampaign-pro/fluentcampaign-pro.php')) {
+    if (is_plugin_active_for_network(plugin_basename(FLUENTCRM_MAIN_FILE))) {
         switch_to_blog($new_site->blog_id);
         \FluentCampaign\App\Migration\Migrate::run(false);
         restore_current_blog();
@@ -80,7 +81,11 @@ add_action('wp_insert_site', function ($new_site) {
 });
 
 add_action('init', function () {
-    load_plugin_textdomain('fluentcampaign-pro', false, dirname(plugin_basename(__FILE__)) . '/languages');
+    load_plugin_textdomain(
+        'fluentcampaign-pro',
+        false,
+        dirname(plugin_basename(FLUENTCRM_MAIN_FILE)) . '/pro/languages'
+    );
 });
 
 add_action('plugins_loaded', function () {
@@ -89,7 +94,7 @@ add_action('plugins_loaded', function () {
         'item_id'           => 7560867, // Product ID from FluentCart
         'settings_key'      => '__fluentcrm_campaign_license',
         'plugin_title'      => 'FluentCRM Pro',
-        'basename'          => 'fluentcampaign-pro/fluentcampaign-pro.php', // Plugin basename (e.g., 'your-plugin/your-plugin.php')
+        'basename'          => plugin_basename(FLUENTCRM_MAIN_FILE),
         'api_url'           => 'https://fluentapi.wpmanageninja.com/', // The API URL for license verification. Normally your store URL
         'store_url'         => 'https://wpmanageninja.com/', // Your store URL
         'purchase_url'      => 'https://fluentcrm.com/', // Purchase URL
