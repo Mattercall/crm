@@ -7,12 +7,20 @@ if (!defined('ABSPATH')) {
 class FCRM_FB_Events_Admin
 {
     const SETTINGS_SLUG = 'fcrm-fb-events';
+    const LEAD_SETTINGS_SLUG = 'fcrm-fb-lead-settings';
+    const LEAD_IMPORT_SLUG = 'fcrm-fb-lead-import';
+    const LEAD_MAPPING_SLUG = 'fcrm-fb-lead-mapping';
+    const LEAD_LOGS_SLUG = 'fcrm-fb-lead-logs';
 
     public function init()
     {
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_notices', [$this, 'maybe_show_notice']);
         add_action('admin_post_fcrm_fb_events_save_settings', [$this, 'handle_save']);
+        add_action('admin_post_fcrm_fb_events_save_lead_settings', [$this, 'handle_save_lead_settings']);
+        add_action('admin_post_fcrm_fb_events_save_lead_mapping', [$this, 'handle_save_lead_mapping']);
+        add_action('admin_post_fcrm_fb_events_import_leads', [$this, 'handle_import_leads']);
+        add_action('admin_post_fcrm_fb_events_test_connection', [$this, 'handle_test_connection']);
         add_action('admin_init', [$this, 'maybe_redirect_legacy_slug']);
     }
 
@@ -32,6 +40,51 @@ class FCRM_FB_Events_Admin
             self::SETTINGS_SLUG,
             [$this, 'render_settings_page'],
             'dashicons-facebook-alt'
+        );
+
+        add_submenu_page(
+            self::SETTINGS_SLUG,
+            __('Events Settings', 'fluentcrm-facebook-events'),
+            __('Events Settings', 'fluentcrm-facebook-events'),
+            $capability,
+            self::SETTINGS_SLUG,
+            [$this, 'render_settings_page']
+        );
+
+        add_submenu_page(
+            self::SETTINGS_SLUG,
+            __('Lead Ads Settings', 'fluentcrm-facebook-events'),
+            __('Lead Ads Settings', 'fluentcrm-facebook-events'),
+            $capability,
+            self::LEAD_SETTINGS_SLUG,
+            [$this, 'render_lead_settings_page']
+        );
+
+        add_submenu_page(
+            self::SETTINGS_SLUG,
+            __('Lead Ads Import', 'fluentcrm-facebook-events'),
+            __('Lead Ads Import', 'fluentcrm-facebook-events'),
+            $capability,
+            self::LEAD_IMPORT_SLUG,
+            [$this, 'render_lead_import_page']
+        );
+
+        add_submenu_page(
+            self::SETTINGS_SLUG,
+            __('Lead Ads Mapping', 'fluentcrm-facebook-events'),
+            __('Lead Ads Mapping', 'fluentcrm-facebook-events'),
+            $capability,
+            self::LEAD_MAPPING_SLUG,
+            [$this, 'render_lead_mapping_page']
+        );
+
+        add_submenu_page(
+            self::SETTINGS_SLUG,
+            __('Lead Ads Logs', 'fluentcrm-facebook-events'),
+            __('Lead Ads Logs', 'fluentcrm-facebook-events'),
+            $capability,
+            self::LEAD_LOGS_SLUG,
+            [$this, 'render_lead_logs_page']
         );
     }
 
@@ -89,6 +142,28 @@ class FCRM_FB_Events_Admin
             'send_mode' => 'immediate',
             'debug_logging' => 'no',
             'delete_data_on_uninstall' => 'no',
+            'lead_ads' => [
+                'enabled' => 'no',
+                'app_id' => '',
+                'app_secret' => '',
+                'access_token' => '',
+                'page_id' => '',
+                'ad_account_id' => '',
+                'verify_token' => '',
+                'missing_email_action' => 'skip',
+                'contact_status' => 'subscribed',
+                'dedupe_by_phone' => 'no',
+                'tag_ids' => [],
+                'list_ids' => [],
+            ],
+            'lead_field_mapping' => [
+                'email' => 'email',
+                'full_name' => 'full_name',
+                'first_name' => 'first_name',
+                'last_name' => 'last_name',
+                'phone_number' => 'phone',
+                'phone' => 'phone',
+            ],
             'mappings' => [
                 'tag_applied' => [
                     'label' => __('Tag Applied', 'fluentcrm-facebook-events'),
@@ -158,6 +233,11 @@ class FCRM_FB_Events_Admin
             $settings['mappings'][$key] = wp_parse_args($settings['mappings'][$key] ?? [], $mapping);
         }
 
+        $settings['lead_ads'] = wp_parse_args($settings['lead_ads'] ?? [], $defaults['lead_ads']);
+        $settings['lead_field_mapping'] = is_array($settings['lead_field_mapping'] ?? null)
+            ? $settings['lead_field_mapping']
+            : $defaults['lead_field_mapping'];
+
         return $settings;
     }
 
@@ -171,8 +251,10 @@ class FCRM_FB_Events_Admin
 
         $input = wp_unslash($_POST);
         $defaults = self::get_default_settings();
+        $existing = get_option(FCRM_FB_EVENTS_OPTION_KEY, []);
 
-        $settings = [
+        $settings = wp_parse_args($existing, $defaults);
+        $settings = array_merge($settings, [
             'enabled' => !empty($input['enabled']) ? 'yes' : 'no',
             'pixel_id' => sanitize_text_field($input['pixel_id'] ?? ''),
             'access_token' => sanitize_text_field($input['access_token'] ?? ''),
@@ -182,7 +264,7 @@ class FCRM_FB_Events_Admin
             'debug_logging' => !empty($input['debug_logging']) ? 'yes' : 'no',
             'delete_data_on_uninstall' => !empty($input['delete_data_on_uninstall']) ? 'yes' : 'no',
             'mappings' => $defaults['mappings'],
-        ];
+        ]);
 
         foreach ($defaults['mappings'] as $key => $mapping) {
             $map_input = $input['mappings'][$key] ?? [];
@@ -202,6 +284,194 @@ class FCRM_FB_Events_Admin
         update_option(FCRM_FB_EVENTS_OPTION_KEY, $settings, false);
 
         wp_safe_redirect(add_query_arg(['page' => self::SETTINGS_SLUG, 'updated' => 'true'], admin_url('admin.php')));
+        exit;
+    }
+
+    public function handle_save_lead_settings()
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die(esc_html__('You do not have permission to perform this action.', 'fluentcrm-facebook-events'));
+        }
+
+        check_admin_referer('fcrm_fb_events_save_lead_settings');
+
+        $input = wp_unslash($_POST);
+        $defaults = self::get_default_settings();
+        $settings = self::get_settings();
+
+        $lead_settings = [
+            'enabled' => !empty($input['lead_enabled']) ? 'yes' : 'no',
+            'app_id' => sanitize_text_field($input['app_id'] ?? ''),
+            'app_secret' => sanitize_text_field($input['app_secret'] ?? ''),
+            'access_token' => sanitize_text_field($input['lead_access_token'] ?? ''),
+            'page_id' => sanitize_text_field($input['page_id'] ?? ''),
+            'ad_account_id' => sanitize_text_field($input['ad_account_id'] ?? ''),
+            'verify_token' => sanitize_text_field($input['verify_token'] ?? ''),
+            'missing_email_action' => in_array(($input['missing_email_action'] ?? 'skip'), ['skip', 'phone_only'], true) ? $input['missing_email_action'] : 'skip',
+            'contact_status' => in_array(($input['contact_status'] ?? 'subscribed'), ['subscribed', 'pending'], true) ? $input['contact_status'] : 'subscribed',
+            'dedupe_by_phone' => !empty($input['dedupe_by_phone']) ? 'yes' : 'no',
+            'tag_ids' => array_values(array_filter(array_map('absint', (array) ($input['tag_ids'] ?? [])))),
+            'list_ids' => array_values(array_filter(array_map('absint', (array) ($input['list_ids'] ?? [])))),
+        ];
+
+        $settings['lead_ads'] = wp_parse_args($lead_settings, $defaults['lead_ads']);
+
+        update_option(FCRM_FB_EVENTS_OPTION_KEY, $settings, false);
+
+        wp_safe_redirect(add_query_arg(['page' => self::LEAD_SETTINGS_SLUG, 'updated' => 'true'], admin_url('admin.php')));
+        exit;
+    }
+
+    public function handle_save_lead_mapping()
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die(esc_html__('You do not have permission to perform this action.', 'fluentcrm-facebook-events'));
+        }
+
+        check_admin_referer('fcrm_fb_events_save_lead_mapping');
+
+        $input = wp_unslash($_POST);
+        $settings = self::get_settings();
+        $mapping_input = $input['mapping'] ?? [];
+        $custom_keys = $input['mapping_custom_key'] ?? [];
+        $custom_values = $input['mapping_custom_value'] ?? [];
+        $mapping = [];
+
+        foreach ($mapping_input as $fb_field => $fluent_field) {
+            $fb_field = sanitize_key($fb_field);
+            $fluent_field = sanitize_key($fluent_field);
+
+            if ($fb_field && $fluent_field) {
+                $mapping[$fb_field] = $fluent_field;
+            }
+        }
+
+        if (!empty($custom_keys) && !empty($custom_values)) {
+            foreach ($custom_keys as $index => $custom_key) {
+                $custom_key = sanitize_key($custom_key);
+                $custom_value = isset($custom_values[$index]) ? sanitize_key($custom_values[$index]) : '';
+                if ($custom_key && $custom_value) {
+                    $mapping[$custom_key] = $custom_value;
+                }
+            }
+        }
+
+        $settings['lead_field_mapping'] = $mapping;
+
+        update_option(FCRM_FB_EVENTS_OPTION_KEY, $settings, false);
+
+        wp_safe_redirect(add_query_arg(['page' => self::LEAD_MAPPING_SLUG, 'updated' => 'true'], admin_url('admin.php')));
+        exit;
+    }
+
+    public function handle_import_leads()
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die(esc_html__('You do not have permission to perform this action.', 'fluentcrm-facebook-events'));
+        }
+
+        check_admin_referer('fcrm_fb_events_import_leads');
+
+        $input = wp_unslash($_POST);
+        $page_id = sanitize_text_field($input['page_id'] ?? '');
+        $form_id = sanitize_text_field($input['form_id'] ?? '');
+        $limit = !empty($input['limit']) ? absint($input['limit']) : 50;
+        $after = sanitize_text_field($input['after'] ?? '');
+
+        $since = sanitize_text_field($input['since'] ?? '');
+        $until = sanitize_text_field($input['until'] ?? '');
+        $since_timestamp = $since ? strtotime($since . ' 00:00:00') : null;
+        $until_timestamp = $until ? strtotime($until . ' 23:59:59') : null;
+
+        $lead_ads = fcrm_fb_events_lead_ads();
+        $imported = 0;
+        $skipped = 0;
+        $errors = 0;
+        $next_cursor = '';
+        $pages = 0;
+
+        if (!$form_id) {
+            $errors++;
+        } else {
+            do {
+                $response = $lead_ads->fetch_leads($form_id, [
+                    'limit' => $limit,
+                    'after' => $after ?: null,
+                    'since' => $since_timestamp,
+                    'until' => $until_timestamp,
+                ]);
+
+                if (is_wp_error($response)) {
+                    $errors++;
+                    break;
+                }
+
+                $leads = $response['data'] ?? [];
+                foreach ($leads as $lead) {
+                    $result = $lead_ads->import_lead_payload($lead, [
+                        'form_id' => $form_id,
+                        'page_id' => $page_id,
+                        'source' => 'manual',
+                    ]);
+
+                    if (is_wp_error($result)) {
+                        if ($result->get_error_code() === 'duplicate') {
+                            $skipped++;
+                        } else {
+                            $errors++;
+                        }
+                    } else {
+                        $imported++;
+                    }
+                }
+
+                $next_cursor = $response['paging']['cursors']['after'] ?? '';
+                $after = $next_cursor;
+                $pages++;
+            } while ($after && $pages < 10);
+        }
+
+        if ($form_id) {
+            $state = get_option(FCRM_FB_EVENTS_LEAD_IMPORT_OPTION, []);
+            $state['forms'] = $state['forms'] ?? [];
+            $state['forms'][$form_id] = current_time('mysql');
+            update_option(FCRM_FB_EVENTS_LEAD_IMPORT_OPTION, $state, false);
+        }
+
+        $message = sprintf(
+            __('Imported %1$d lead(s), skipped %2$d, errors %3$d.', 'fluentcrm-facebook-events'),
+            $imported,
+            $skipped,
+            $errors
+        );
+
+        if ($next_cursor) {
+            $message .= ' ' . sprintf(__('Next cursor: %s', 'fluentcrm-facebook-events'), $next_cursor);
+        }
+
+        set_transient('fcrm_fb_events_lead_import_notice', $message, 30);
+
+        wp_safe_redirect(add_query_arg(['page' => self::LEAD_IMPORT_SLUG, 'page_id' => $page_id, 'form_id' => $form_id], admin_url('admin.php')));
+        exit;
+    }
+
+    public function handle_test_connection()
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die(esc_html__('You do not have permission to perform this action.', 'fluentcrm-facebook-events'));
+        }
+
+        check_admin_referer('fcrm_fb_events_test_connection');
+
+        $lead_ads = fcrm_fb_events_lead_ads();
+        $result = $lead_ads->test_connection();
+        if (is_wp_error($result)) {
+            set_transient('fcrm_fb_events_lead_test_notice', $result->get_error_message(), 30);
+        } else {
+            set_transient('fcrm_fb_events_lead_test_notice', __('Connection successful.', 'fluentcrm-facebook-events'), 30);
+        }
+
+        wp_safe_redirect(add_query_arg(['page' => self::LEAD_SETTINGS_SLUG], admin_url('admin.php')));
         exit;
     }
 
@@ -361,6 +631,344 @@ class FCRM_FB_Events_Admin
         echo '</div>';
     }
 
+    public function render_lead_settings_page()
+    {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $settings = self::get_settings();
+        $lead_settings = $settings['lead_ads'];
+        $updated = !empty($_GET['updated']);
+        $tags = $this->get_available_tags();
+        $lists = $this->get_available_lists();
+        $notice = get_transient('fcrm_fb_events_lead_test_notice');
+        if ($notice) {
+            delete_transient('fcrm_fb_events_lead_test_notice');
+        }
+
+        $webhook_url = rest_url(FCRM_FB_Events_Lead_Ads::REST_NAMESPACE . FCRM_FB_Events_Lead_Ads::WEBHOOK_ROUTE);
+
+        echo '<div class="wrap">';
+        echo '<h1>' . esc_html__('Facebook Lead Ads Settings', 'fluentcrm-facebook-events') . '</h1>';
+
+        if ($updated) {
+            echo '<div class="notice notice-success"><p>' . esc_html__('Settings saved.', 'fluentcrm-facebook-events') . '</p></div>';
+        }
+
+        if ($notice) {
+            echo '<div class="notice notice-info"><p>' . esc_html($notice) . '</p></div>';
+        }
+
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+        echo '<input type="hidden" name="action" value="fcrm_fb_events_save_lead_settings" />';
+        wp_nonce_field('fcrm_fb_events_save_lead_settings');
+
+        echo '<table class="form-table" role="presentation">';
+        $this->render_checkbox_row('lead_enabled', __('Enable Lead Ads Sync', 'fluentcrm-facebook-events'), $lead_settings['enabled'] === 'yes');
+        $this->render_text_row('app_id', __('Facebook App ID (optional)', 'fluentcrm-facebook-events'), $lead_settings['app_id']);
+        $this->render_text_row('app_secret', __('Facebook App Secret (optional)', 'fluentcrm-facebook-events'), $lead_settings['app_secret']);
+        $this->render_text_row('lead_access_token', __('Access Token', 'fluentcrm-facebook-events'), $lead_settings['access_token']);
+        $this->render_text_row('page_id', __('Default Page ID (optional)', 'fluentcrm-facebook-events'), $lead_settings['page_id']);
+        $this->render_text_row('ad_account_id', __('Ad Account ID (optional)', 'fluentcrm-facebook-events'), $lead_settings['ad_account_id']);
+        $this->render_text_row('verify_token', __('Webhook Verify Token', 'fluentcrm-facebook-events'), $lead_settings['verify_token']);
+
+        echo '<tr>';
+        echo '<th scope="row">' . esc_html__('Webhook URL', 'fluentcrm-facebook-events') . '</th>';
+        echo '<td><code>' . esc_html($webhook_url) . '</code></td>';
+        echo '</tr>';
+
+        echo '<tr>';
+        echo '<th scope="row">' . esc_html__('Missing Email Behavior', 'fluentcrm-facebook-events') . '</th>';
+        echo '<td>';
+        echo '<select name="missing_email_action">';
+        echo '<option value="skip" ' . selected('skip', $lead_settings['missing_email_action'], false) . '>' . esc_html__('Skip lead', 'fluentcrm-facebook-events') . '</option>';
+        echo '<option value="phone_only" ' . selected('phone_only', $lead_settings['missing_email_action'], false) . '>' . esc_html__('Create contact with phone only', 'fluentcrm-facebook-events') . '</option>';
+        echo '</select>';
+        echo '</td>';
+        echo '</tr>';
+
+        echo '<tr>';
+        echo '<th scope="row">' . esc_html__('Contact Status', 'fluentcrm-facebook-events') . '</th>';
+        echo '<td>';
+        echo '<select name="contact_status">';
+        echo '<option value="subscribed" ' . selected('subscribed', $lead_settings['contact_status'], false) . '>' . esc_html__('Subscribed', 'fluentcrm-facebook-events') . '</option>';
+        echo '<option value="pending" ' . selected('pending', $lead_settings['contact_status'], false) . '>' . esc_html__('Pending', 'fluentcrm-facebook-events') . '</option>';
+        echo '</select>';
+        echo '</td>';
+        echo '</tr>';
+
+        $this->render_checkbox_row('dedupe_by_phone', __('Dedupe by phone when email missing', 'fluentcrm-facebook-events'), $lead_settings['dedupe_by_phone'] === 'yes');
+
+        echo '<tr>';
+        echo '<th scope="row">' . esc_html__('Apply Tags', 'fluentcrm-facebook-events') . '</th>';
+        echo '<td>';
+        if (empty($tags)) {
+            echo '<em>' . esc_html__('No tags available.', 'fluentcrm-facebook-events') . '</em>';
+        } else {
+            echo '<select name="tag_ids[]" multiple="multiple" size="5">';
+            foreach ($tags as $tag) {
+                $selected = in_array((int) $tag->id, (array) $lead_settings['tag_ids'], true);
+                echo '<option value="' . esc_attr($tag->id) . '" ' . selected(true, $selected, false) . '>' . esc_html($tag->title) . '</option>';
+            }
+            echo '</select>';
+        }
+        echo '</td>';
+        echo '</tr>';
+
+        echo '<tr>';
+        echo '<th scope="row">' . esc_html__('Apply Lists', 'fluentcrm-facebook-events') . '</th>';
+        echo '<td>';
+        if (empty($lists)) {
+            echo '<em>' . esc_html__('No lists available.', 'fluentcrm-facebook-events') . '</em>';
+        } else {
+            echo '<select name="list_ids[]" multiple="multiple" size="5">';
+            foreach ($lists as $list) {
+                $selected = in_array((int) $list->id, (array) $lead_settings['list_ids'], true);
+                echo '<option value="' . esc_attr($list->id) . '" ' . selected(true, $selected, false) . '>' . esc_html($list->title) . '</option>';
+            }
+            echo '</select>';
+        }
+        echo '</td>';
+        echo '</tr>';
+
+        echo '</table>';
+
+        submit_button(__('Save Lead Ads Settings', 'fluentcrm-facebook-events'));
+        echo '</form>';
+
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:20px;">';
+        echo '<input type="hidden" name="action" value="fcrm_fb_events_test_connection" />';
+        wp_nonce_field('fcrm_fb_events_test_connection');
+        submit_button(__('Test Connection', 'fluentcrm-facebook-events'), 'secondary', 'submit', false);
+        echo '</form>';
+
+        echo '</div>';
+    }
+
+    public function render_lead_import_page()
+    {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $settings = self::get_settings();
+        $lead_settings = $settings['lead_ads'];
+        $lead_ads = fcrm_fb_events_lead_ads();
+        $notice = get_transient('fcrm_fb_events_lead_import_notice');
+        if ($notice) {
+            delete_transient('fcrm_fb_events_lead_import_notice');
+        }
+
+        $selected_page = sanitize_text_field($_GET['page_id'] ?? $lead_settings['page_id']);
+        $selected_form = sanitize_text_field($_GET['form_id'] ?? '');
+
+        $pages = $lead_ads->get_pages();
+        $forms = [];
+        if (!is_wp_error($pages) && $selected_page) {
+            $forms = $lead_ads->get_forms($selected_page);
+        }
+
+        echo '<div class="wrap">';
+        echo '<h1>' . esc_html__('Facebook Lead Ads Import', 'fluentcrm-facebook-events') . '</h1>';
+
+        if ($notice) {
+            echo '<div class="notice notice-info"><p>' . esc_html($notice) . '</p></div>';
+        }
+
+        if (is_wp_error($pages)) {
+            echo '<div class="notice notice-error"><p>' . esc_html($pages->get_error_message()) . '</p></div>';
+        }
+
+        echo '<form method="get" action="' . esc_url(admin_url('admin.php')) . '">';
+        echo '<input type="hidden" name="page" value="' . esc_attr(self::LEAD_IMPORT_SLUG) . '" />';
+        echo '<table class="form-table"><tbody>';
+        echo '<tr>';
+        echo '<th scope="row">' . esc_html__('Facebook Page', 'fluentcrm-facebook-events') . '</th>';
+        echo '<td>';
+        if (!is_wp_error($pages) && !empty($pages)) {
+            echo '<select name="page_id">';
+            echo '<option value="">' . esc_html__('Select Page', 'fluentcrm-facebook-events') . '</option>';
+            foreach ($pages as $page) {
+                $selected = ($selected_page && $selected_page === $page['id']);
+                echo '<option value="' . esc_attr($page['id']) . '" ' . selected(true, $selected, false) . '>' . esc_html($page['name']) . '</option>';
+            }
+            echo '</select>';
+        } else {
+            echo '<em>' . esc_html__('No pages found or invalid token.', 'fluentcrm-facebook-events') . '</em>';
+        }
+        echo '</td>';
+        echo '</tr>';
+        echo '</tbody></table>';
+        submit_button(__('Load Forms', 'fluentcrm-facebook-events'), 'secondary', 'submit', false);
+        echo '</form>';
+
+        if (is_wp_error($forms)) {
+            echo '<div class="notice notice-error"><p>' . esc_html($forms->get_error_message()) . '</p></div>';
+        }
+
+        if (!is_wp_error($forms) && !empty($forms)) {
+            $last_imported = $selected_form ? FCRM_FB_Events_Lead_Store::get_last_import_time($selected_form) : null;
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:20px;">';
+            echo '<input type="hidden" name="action" value="fcrm_fb_events_import_leads" />';
+            wp_nonce_field('fcrm_fb_events_import_leads');
+            echo '<input type="hidden" name="page_id" value="' . esc_attr($selected_page) . '" />';
+
+            echo '<table class="form-table"><tbody>';
+            echo '<tr>';
+            echo '<th scope="row">' . esc_html__('Lead Form', 'fluentcrm-facebook-events') . '</th>';
+            echo '<td><select name="form_id">';
+            foreach ($forms as $form) {
+                $selected = ($selected_form && $selected_form === $form['id']);
+                echo '<option value="' . esc_attr($form['id']) . '" ' . selected(true, $selected, false) . '>' . esc_html($form['name']) . '</option>';
+            }
+            echo '</select></td>';
+            echo '</tr>';
+
+            echo '<tr>';
+            echo '<th scope="row">' . esc_html__('Date Range', 'fluentcrm-facebook-events') . '</th>';
+            echo '<td>';
+            echo '<input type="date" name="since" /> ' . esc_html__('to', 'fluentcrm-facebook-events') . ' ';
+            echo '<input type="date" name="until" />';
+            if ($last_imported) {
+                echo '<p class="description">' . sprintf(esc_html__('Last imported at %s', 'fluentcrm-facebook-events'), esc_html($last_imported)) . '</p>';
+            }
+            echo '</td>';
+            echo '</tr>';
+
+            echo '<tr>';
+            echo '<th scope="row">' . esc_html__('Limit Per Request', 'fluentcrm-facebook-events') . '</th>';
+            echo '<td><input type="number" name="limit" value="50" min="1" max="200" /></td>';
+            echo '</tr>';
+
+            echo '<tr>';
+            echo '<th scope="row">' . esc_html__('Pagination Cursor (optional)', 'fluentcrm-facebook-events') . '</th>';
+            echo '<td><input type="text" class="regular-text" name="after" value="" /></td>';
+            echo '</tr>';
+
+            echo '</tbody></table>';
+
+            submit_button(__('Fetch Leads', 'fluentcrm-facebook-events'));
+            echo '</form>';
+        }
+
+        echo '</div>';
+    }
+
+    public function render_lead_mapping_page()
+    {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $settings = self::get_settings();
+        $mapping = $settings['lead_field_mapping'];
+        $updated = !empty($_GET['updated']);
+
+        $default_fields = [
+            'email' => __('Email', 'fluentcrm-facebook-events'),
+            'full_name' => __('Full Name', 'fluentcrm-facebook-events'),
+            'first_name' => __('First Name', 'fluentcrm-facebook-events'),
+            'last_name' => __('Last Name', 'fluentcrm-facebook-events'),
+            'phone_number' => __('Phone Number', 'fluentcrm-facebook-events'),
+            'phone' => __('Phone', 'fluentcrm-facebook-events'),
+            'company_name' => __('Company', 'fluentcrm-facebook-events'),
+            'city' => __('City', 'fluentcrm-facebook-events'),
+            'state' => __('State', 'fluentcrm-facebook-events'),
+            'zip' => __('Zip', 'fluentcrm-facebook-events'),
+            'country' => __('Country', 'fluentcrm-facebook-events'),
+        ];
+
+        $custom_fields = array_diff_key($mapping, $default_fields);
+
+        echo '<div class="wrap">';
+        echo '<h1>' . esc_html__('Facebook Lead Ads Field Mapping', 'fluentcrm-facebook-events') . '</h1>';
+
+        if ($updated) {
+            echo '<div class="notice notice-success"><p>' . esc_html__('Mapping saved.', 'fluentcrm-facebook-events') . '</p></div>';
+        }
+
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+        echo '<input type="hidden" name="action" value="fcrm_fb_events_save_lead_mapping" />';
+        wp_nonce_field('fcrm_fb_events_save_lead_mapping');
+
+        echo '<table class="widefat striped">';
+        echo '<thead><tr>';
+        echo '<th>' . esc_html__('Facebook Field', 'fluentcrm-facebook-events') . '</th>';
+        echo '<th>' . esc_html__('FluentCRM Field Key', 'fluentcrm-facebook-events') . '</th>';
+        echo '</tr></thead><tbody>';
+
+        foreach ($default_fields as $fb_key => $label) {
+            $value = $mapping[$fb_key] ?? '';
+            echo '<tr>';
+            echo '<td>' . esc_html($label) . ' <code>' . esc_html($fb_key) . '</code></td>';
+            echo '<td><input type="text" name="mapping[' . esc_attr($fb_key) . ']" value="' . esc_attr($value) . '" placeholder="' . esc_attr__('e.g. email, first_name, phone, custom_key', 'fluentcrm-facebook-events') . '" /></td>';
+            echo '</tr>';
+        }
+
+        if (!empty($custom_fields)) {
+            foreach ($custom_fields as $fb_key => $fluent_key) {
+                echo '<tr>';
+                echo '<td><code>' . esc_html($fb_key) . '</code></td>';
+                echo '<td><input type="text" name="mapping[' . esc_attr($fb_key) . ']" value="' . esc_attr($fluent_key) . '" /></td>';
+                echo '</tr>';
+            }
+        }
+
+        for ($i = 0; $i < 3; $i++) {
+            echo '<tr>';
+            echo '<td><input type="text" name="mapping_custom_key[]" value="" placeholder="' . esc_attr__('facebook_field', 'fluentcrm-facebook-events') . '" /></td>';
+            echo '<td><input type="text" name="mapping_custom_value[]" value="" placeholder="' . esc_attr__('fluentcrm_field_key', 'fluentcrm-facebook-events') . '" /></td>';
+            echo '</tr>';
+        }
+
+        echo '</tbody></table>';
+
+        submit_button(__('Save Mapping', 'fluentcrm-facebook-events'));
+        echo '</form>';
+        echo '</div>';
+    }
+
+    public function render_lead_logs_page()
+    {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $logs = FCRM_FB_Events_Logger::get_logs(100, 'lead_ads');
+
+        echo '<div class="wrap">';
+        echo '<h1>' . esc_html__('Facebook Lead Ads Logs', 'fluentcrm-facebook-events') . '</h1>';
+        echo '<p>' . esc_html__('Shows the most recent 100 imports and webhook attempts.', 'fluentcrm-facebook-events') . '</p>';
+        echo '<table class="widefat striped">';
+        echo '<thead><tr>';
+        echo '<th>' . esc_html__('Time', 'fluentcrm-facebook-events') . '</th>';
+        echo '<th>' . esc_html__('Trigger', 'fluentcrm-facebook-events') . '</th>';
+        echo '<th>' . esc_html__('Contact', 'fluentcrm-facebook-events') . '</th>';
+        echo '<th>' . esc_html__('Event Name', 'fluentcrm-facebook-events') . '</th>';
+        echo '<th>' . esc_html__('Status', 'fluentcrm-facebook-events') . '</th>';
+        echo '<th>' . esc_html__('Response', 'fluentcrm-facebook-events') . '</th>';
+        echo '</tr></thead><tbody>';
+
+        if (empty($logs)) {
+            echo '<tr><td colspan="6">' . esc_html__('No log entries found.', 'fluentcrm-facebook-events') . '</td></tr>';
+        } else {
+            foreach ($logs as $log) {
+                echo '<tr>';
+                echo '<td>' . esc_html($log['created_at']) . '</td>';
+                echo '<td>' . esc_html($log['trigger']) . '</td>';
+                echo '<td>' . esc_html($log['contact_identifier']) . '</td>';
+                echo '<td>' . esc_html($log['event_name']) . '</td>';
+                echo '<td>' . esc_html($log['status_code']) . '</td>';
+                echo '<td>' . esc_html($log['response']) . '</td>';
+                echo '</tr>';
+            }
+        }
+
+        echo '</tbody></table>';
+        echo '</div>';
+    }
+
     private function render_checkbox_row($name, $label, $checked)
     {
         echo '<tr>';
@@ -384,5 +992,14 @@ class FCRM_FB_Events_Admin
         }
 
         return FluentCrm\App\Models\Tag::orderBy('title', 'ASC')->get();
+    }
+
+    private function get_available_lists()
+    {
+        if (!class_exists('FluentCrm\\App\\Models\\Lists')) {
+            return [];
+        }
+
+        return FluentCrm\App\Models\Lists::orderBy('title', 'ASC')->get();
     }
 }

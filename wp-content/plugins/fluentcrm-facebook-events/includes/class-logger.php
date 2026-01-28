@@ -78,16 +78,24 @@ class FCRM_FB_Events_Logger
         }
     }
 
-    public static function get_logs($limit = 100)
+    public static function get_logs($limit = 100, $trigger = null)
     {
         global $wpdb;
 
         $table = self::table_name();
+        $query = "SELECT created_at, trigger_name, contact_id, email, event_name, status_code, response FROM {$table}";
+        $params = [];
+
+        if ($trigger) {
+            $query .= " WHERE trigger_name = %s";
+            $params[] = $trigger;
+        }
+
+        $query .= " ORDER BY id DESC LIMIT %d";
+        $params[] = (int) $limit;
+
         $rows = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT created_at, trigger_name, contact_id, email, event_name, status_code, response FROM {$table} ORDER BY id DESC LIMIT %d",
-                (int) $limit
-            ),
+            $wpdb->prepare($query, $params),
             ARRAY_A
         );
 

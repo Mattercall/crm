@@ -20,13 +20,17 @@ define('FCRM_FB_EVENTS_OPTION_KEY', 'fcrm_fb_events_settings');
 
 define('FCRM_FB_EVENTS_LOG_TABLE', 'fcrm_fb_events_log');
 define('FCRM_FB_EVENTS_QUEUE_TABLE', 'fcrm_fb_events_queue');
+define('FCRM_FB_EVENTS_LEAD_TABLE', 'fcrm_fb_events_leads');
+define('FCRM_FB_EVENTS_LEAD_IMPORT_OPTION', 'fcrm_fb_events_lead_import_state');
 
 define('FCRM_FB_EVENTS_PLUGIN_BASENAME', plugin_basename(__FILE__));
 
 require_once FCRM_FB_EVENTS_PATH . 'includes/class-admin.php';
 require_once FCRM_FB_EVENTS_PATH . 'includes/class-hooks.php';
 require_once FCRM_FB_EVENTS_PATH . 'includes/class-facebook-capi.php';
+require_once FCRM_FB_EVENTS_PATH . 'includes/class-facebook-lead-ads.php';
 require_once FCRM_FB_EVENTS_PATH . 'includes/class-logger.php';
+require_once FCRM_FB_EVENTS_PATH . 'includes/class-lead-store.php';
 require_once FCRM_FB_EVENTS_PATH . 'includes/class-queue.php';
 
 /**
@@ -44,8 +48,21 @@ function fcrm_fb_events_bootstrap()
 
     $queue = new FCRM_FB_Events_Queue();
     $queue->init();
+
+    $lead_ads = fcrm_fb_events_lead_ads();
+    $lead_ads->init();
 }
 add_action('plugins_loaded', 'fcrm_fb_events_bootstrap');
+
+function fcrm_fb_events_lead_ads()
+{
+    static $instance = null;
+    if (!$instance) {
+        $instance = new FCRM_FB_Events_Lead_Ads();
+    }
+
+    return $instance;
+}
 
 /**
  * Activation hook.
@@ -54,6 +71,7 @@ function fcrm_fb_events_activate()
 {
     FCRM_FB_Events_Logger::create_table();
     FCRM_FB_Events_Queue::create_table();
+    FCRM_FB_Events_Lead_Store::create_table();
 
     $queue = new FCRM_FB_Events_Queue();
     $queue->schedule_cron();
