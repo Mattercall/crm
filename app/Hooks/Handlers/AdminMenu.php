@@ -1662,6 +1662,7 @@ class AdminMenu
             '\/gutenberg\/'
         ]);
         $approvedSlugs[] = 'fluent-crm';
+        $approvedSlugs[] = preg_quote(basename(rtrim(FLUENTCRM_PLUGIN_PATH, '/')), '/');
         $approvedSlugs = array_unique($approvedSlugs);
         $approvedSlugs = implode('|', $approvedSlugs);
 
@@ -1701,6 +1702,7 @@ class AdminMenu
             ]);
 
             $approvedSlugs[] = 'fluent-crm';
+            $approvedSlugs[] = preg_quote(basename(rtrim(FLUENTCRM_PLUGIN_PATH, '/')), '/');
 
             $approvedSlugs = array_unique($approvedSlugs);
 
