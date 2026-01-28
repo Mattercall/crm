@@ -12,6 +12,7 @@ class FCRM_FB_Events_Lead_Ads
     public function init()
     {
         add_action('rest_api_init', [$this, 'register_routes']);
+        add_filter('rest_pre_serve_request', [$this, 'maybe_serve_raw_challenge'], 10, 4);
     }
 
     public function register_routes()
@@ -98,6 +99,34 @@ class FCRM_FB_Events_Lead_Ads
         }
 
         return new WP_REST_Response($challenge, 200);
+    }
+
+    public function maybe_serve_raw_challenge($served, $result, WP_REST_Request $request, WP_REST_Server $server)
+    {
+        if (!$result instanceof WP_REST_Response) {
+            return $served;
+        }
+
+        if ($request->get_method() !== 'GET') {
+            return $served;
+        }
+
+        if ($request->get_route() !== '/' . self::REST_NAMESPACE . self::WEBHOOK_ROUTE) {
+            return $served;
+        }
+
+        if ((int) $result->get_status() !== 200) {
+            return $served;
+        }
+
+        $data = $result->get_data();
+        if (!is_string($data)) {
+            return $served;
+        }
+
+        header('Content-Type: text/plain; charset=' . get_option('blog_charset'));
+        echo $data;
+        return true;
     }
 
     private function get_request_param(WP_REST_Request $request, $key)
