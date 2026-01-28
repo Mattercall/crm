@@ -267,10 +267,10 @@ $standardEvents = $integration->getStandardEventNames();
 		}
 
 		$( '#pys-fluentcrm-add-rule' ).on( 'click', function () {
-			const index = $tableBody.find( 'tr' ).length;
+			const uuid = `fluentcrm_${Date.now()}_${Math.floor( Math.random() * 100000 )}`;
 			const rowHtml = template
-				.replace( /__index__/g, index )
-				.replace( /__uuid__/g, `fluentcrm_${Date.now()}_${Math.floor( Math.random() * 100000 )}` );
+				.replace( /__index__/g, uuid )
+				.replace( /__uuid__/g, uuid );
 			$tableBody.find( '.pys-fluentcrm-empty' ).remove();
 			const $row = $( rowHtml );
 			$tableBody.append( $row );

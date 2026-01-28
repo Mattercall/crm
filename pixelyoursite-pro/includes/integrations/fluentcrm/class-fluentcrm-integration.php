@@ -103,7 +103,7 @@ class FluentCRMIntegration extends Settings {
 					continue;
 				}
 
-				$eventResult = $this->triggerRuleEvent( $rule, $subscriber );
+				$eventResult = $this->triggerRuleEvent( $rule, $subscriber, $tagId );
 
 				if ( $eventResult['success'] ) {
 					$this->markRuleFired( $rule, $subscriber, $tagId );
@@ -181,7 +181,7 @@ class FluentCRMIntegration extends Settings {
 		$subscriber->updateMeta( self::META_KEY_FIRED, wp_json_encode( $data ), Subscriber::class );
 	}
 
-	private function triggerRuleEvent( array $rule, Subscriber $subscriber ): array {
+	private function triggerRuleEvent( array $rule, Subscriber $subscriber, int $tagId ): array {
 		if ( ! function_exists( 'PixelYourSite\\PYS' ) ) {
 			return array(
 				'success' => false,
@@ -196,6 +196,12 @@ class FluentCRMIntegration extends Settings {
 		$eventConfig = new FluentCRMCustomEventConfig( $rule );
 		$event = new SingleEvent( 'custom_event', EventTypes::$STATIC, 'custom' );
 		$event->args = $eventConfig;
+		$ruleId = $rule['id'] ?? '';
+		$event->addPayload(
+			array(
+				'custom_event_post_id' => sprintf( 'fluentcrm_%s_%d', $ruleId !== '' ? $ruleId : wp_generate_uuid4(), $tagId ),
+			)
+		);
 
 		$eventsManager = PYS()->getEventsManager();
 		$sent = false;
