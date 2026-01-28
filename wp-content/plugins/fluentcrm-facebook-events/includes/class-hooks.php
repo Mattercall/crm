@@ -179,7 +179,7 @@ class FCRM_FB_Events_Hooks
             return;
         }
 
-        $action_time = current_time('timestamp');
+        $action_time = current_time('timestamp', true);
         $dedupe_key = md5($trigger . '|' . $subscriber->id . '|' . wp_json_encode($context) . '|' . $action_time);
         if (isset($this->processed[$dedupe_key])) {
             return;

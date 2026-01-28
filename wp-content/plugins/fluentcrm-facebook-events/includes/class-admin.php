@@ -13,6 +13,7 @@ class FCRM_FB_Events_Admin
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_notices', [$this, 'maybe_show_notice']);
         add_action('admin_post_fcrm_fb_events_save_settings', [$this, 'handle_save']);
+        add_action('admin_init', [$this, 'maybe_redirect_legacy_slug']);
     }
 
     public static function fluentcrm_active()
@@ -55,6 +56,36 @@ class FCRM_FB_Events_Admin
         }
 
         echo '<div class="notice notice-warning"><p>' . esc_html__('FluentCRM is not active. FluentCRM Facebook Events will remain idle until FluentCRM is activated.', 'fluentcrm-facebook-events') . '</p></div>';
+    }
+
+    public function maybe_redirect_legacy_slug()
+    {
+        if (!is_admin()) {
+            return;
+        }
+
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        if ($request_uri === '') {
+            return;
+        }
+
+        $path = wp_parse_url($request_uri, PHP_URL_PATH);
+        if (!$path) {
+            return;
+        }
+
+        $admin_path = wp_parse_url(admin_url(), PHP_URL_PATH);
+        if (!$admin_path) {
+            return;
+        }
+
+        $legacy_path = untrailingslashit(trailingslashit($admin_path) . self::SETTINGS_SLUG);
+        if (untrailingslashit($path) !== $legacy_path) {
+            return;
+        }
+
+        wp_safe_redirect(admin_url('admin.php?page=' . self::SETTINGS_SLUG));
+        exit;
     }
 
     public static function get_default_settings()
