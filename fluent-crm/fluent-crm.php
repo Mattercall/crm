@@ -18,6 +18,7 @@ if (defined('FLUENTCRM')) {
 }
 
 define('FLUENTCRM', 'fluentcrm');
+define('FLUENTCRM_MAIN_FILE', __FILE__);
 define('FLUENTCRM_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('FLUENTCRM_PLUGIN_PATH', plugin_dir_path(__FILE__));
 define('FLUENTCRM_PLUGIN_VERSION', '2.9.87');
@@ -33,11 +34,18 @@ if (!defined('FLUENTCRM_UPLOAD_DIR')) {
     define('FLUENTCRM_UPLOAD_DIR', '/fluentcrm');
 }
 
+define('FLUENTCRM_PRO_PLUGIN_PATH', trailingslashit(FLUENTCRM_PLUGIN_PATH . 'pro'));
+define('FLUENTCRM_PRO_MAIN_FILE', FLUENTCRM_PRO_PLUGIN_PATH . 'fluentcampaign-pro.php');
+
 require __DIR__ . '/vendor/autoload.php';
 
 call_user_func(function ($bootstrap) {
     $bootstrap(__FILE__);
 }, require(__DIR__ . '/boot/app.php'));
+
+if (file_exists(FLUENTCRM_PRO_MAIN_FILE)) {
+    require_once FLUENTCRM_PRO_MAIN_FILE;
+}
 
 add_filter('plugin_row_meta', 'fluentcrm_plugin_row_meta', 10, 2);
 
