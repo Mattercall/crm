@@ -175,6 +175,7 @@ require_once PYS_PATH.'/includes/enrich/class-enrich_user.php';
 require_once PYS_PATH.'/includes/class-events-manager-ajax_hook.php';
 require_once PYS_PATH.'/includes/class-fixed-notices.php';
 require_once PYS_PATH.'/includes/class-consent.php';
+require_once PYS_PATH.'/includes/integrations/fluentcrm/class-fluentcrm-integration.php';
 
 
 require_once PYS_PATH.'/includes/formEvents/interface-formEvents.php';

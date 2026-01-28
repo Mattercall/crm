@@ -199,6 +199,12 @@ function getAdminSecondaryNavTabs() {
             'pos' => 15,
 			'icon' => PYS_URL . '/dist/images/gtm-logo.svg'
         ),
+        'fluentcrm'   => array(
+            'url'  => buildAdminUrl( 'pixelyoursite', 'fluentcrm' ),
+            'name' => 'FluentCRM',
+            'pos' => 20,
+            'icon' => PYS_URL . '/dist/images/pys-logo.svg'
+        ),
         'hooks'        => array(
             'url'  => buildAdminUrl( 'pixelyoursite', 'hooks' ),
             'name' => 'Filter & Hook List',
