@@ -69,7 +69,9 @@ $app->addAction('wp_ajax_fluentcrm_save_campaign_email_body', 'FunnelHandler@sav
  * Integrations
  */
 $app->addAction('init', 'Integrations@register');
-$app->addAction('init', 'FacebookCapi@register');
+if (class_exists(\FluentCrm\App\Hooks\Handlers\FacebookCapi::class)) {
+    $app->addAction('init', 'FacebookCapi@register');
+}
 
 /*
  * Funnel
@@ -200,4 +202,3 @@ add_action('wp_ajax_fluentcrm_renew_rest_nonce', function () {
         'time'  => time()
     ], 200);
 });
-
