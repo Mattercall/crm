@@ -93,6 +93,10 @@ include_once 'components/recommended-video.php';
 			$title = 'GTM Settings';
 			break;
 
+		case 'fluentcrm':
+			$title = 'FluentCRM Integration';
+			break;
+
         case 'pinterest_settings':
             $title = 'Pinterest Settings';
             break;
@@ -180,6 +184,10 @@ include_once 'components/recommended-video.php';
 						case 'gtm_tags_settings':
 							/** @noinspection PhpIncludeInspection */
 							include PYS_PATH . '/modules/google_gtm/views/html-settings.php';
+							break;
+
+						case 'fluentcrm':
+							include "html-fluentcrm.php";
 							break;
 
 						case 'gdpr':
