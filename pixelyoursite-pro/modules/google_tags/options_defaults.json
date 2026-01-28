@@ -1,0 +1,20 @@
+{
+  "gtag_datalayer_type": "default",
+  "gtag_datalayer_name": "dataLayerPYS",
+
+  "gclid_alternative_enabled": false,
+  "gclid_alternative_param": "",
+
+  "woo_variable_as_simple": true,
+  "woo_variable_data_select_product": true,
+  "woo_variations_use_parent_name": false,
+  "woo_content_id": "product_id",
+  "woo_content_id_prefix": "",
+  "woo_content_id_suffix": "",
+  "woo_wpml_unified_id": false,
+  "woo_wpml_language": "",
+
+  "edd_content_id": "download_id",
+  "edd_content_id_prefix": "",
+  "edd_content_id_suffix": ""
+}
