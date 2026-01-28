@@ -12,6 +12,7 @@ require_once(FLUENTCRM_PLUGIN_PATH . 'database/migrations/Tags.php');
 require_once(FLUENTCRM_PLUGIN_PATH . 'database/migrations/Meta.php');
 require_once(FLUENTCRM_PLUGIN_PATH . 'database/migrations/SubscriberNotes.php');
 require_once(FLUENTCRM_PLUGIN_PATH . 'database/migrations/UrlStores.php');
+require_once(FLUENTCRM_PLUGIN_PATH . 'database/migrations/FacebookCapiLogs.php');
 
 require_once(FLUENTCRM_PLUGIN_PATH . 'database/migrations/Funnels.php');
 require_once(FLUENTCRM_PLUGIN_PATH . 'database/migrations/FunnelSequences.php');
@@ -57,6 +58,7 @@ class FluentCRMDBMigrator
         \FluentCrmMigrations\Meta::migrate();
         \FluentCrmMigrations\SubscriberNotes::migrate();
         \FluentCrmMigrations\UrlStores::migrate();
+        \FluentCrmMigrations\FacebookCapiLogs::migrate();
 
         \FluentCrmMigrations\Funnels::migrate();
         \FluentCrmMigrations\FunnelSequences::migrate();

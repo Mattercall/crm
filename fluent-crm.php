@@ -24,7 +24,7 @@ define('FLUENTCRM_PLUGIN_PATH', plugin_dir_path(__FILE__));
 define('FLUENTCRM_PLUGIN_VERSION', '2.9.87');
 define('FLUENTCRM_MIN_PRO_VERSION', '2.9.84');
 
-define('FLUENTCRM_DB_VERSION', '2.9.50');
+define('FLUENTCRM_DB_VERSION', '2.9.51');
 
 define('FLUENTCRM_FRAMEWORK_VERSION', 3);
 define('FLUENT_CRM_STARTING_TIME', microtime(true));
