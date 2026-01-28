@@ -20,8 +20,10 @@ class FCRM_FB_Events_Admin
         add_action('admin_post_fcrm_fb_events_save_lead_settings', [$this, 'handle_save_lead_settings']);
         add_action('admin_post_fcrm_fb_events_save_lead_mapping', [$this, 'handle_save_lead_mapping']);
         add_action('admin_post_fcrm_fb_events_import_leads', [$this, 'handle_import_leads']);
+        add_action('wp_ajax_fcrm_fb_events_import_leads_ajax', [$this, 'handle_import_leads_ajax']);
         add_action('admin_post_fcrm_fb_events_test_connection', [$this, 'handle_test_connection']);
         add_action('admin_init', [$this, 'maybe_redirect_legacy_slug']);
+        add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
     }
 
     public static function fluentcrm_active()
@@ -86,6 +88,41 @@ class FCRM_FB_Events_Admin
             self::LEAD_LOGS_SLUG,
             [$this, 'render_lead_logs_page']
         );
+    }
+
+    public function enqueue_admin_assets($hook)
+    {
+        if (!is_admin()) {
+            return;
+        }
+
+        $page = $_GET['page'] ?? '';
+        if ($page !== self::LEAD_IMPORT_SLUG) {
+            return;
+        }
+
+        wp_enqueue_script(
+            'fcrm-fb-lead-import',
+            FCRM_FB_EVENTS_URL . 'assets/lead-import.js',
+            ['jquery'],
+            FCRM_FB_EVENTS_VERSION,
+            true
+        );
+
+        wp_enqueue_style(
+            'fcrm-fb-lead-import',
+            FCRM_FB_EVENTS_URL . 'assets/lead-import.css',
+            [],
+            FCRM_FB_EVENTS_VERSION
+        );
+
+        wp_localize_script('fcrm-fb-lead-import', 'FcrmFbLeadImport', [
+            'ajaxUrl' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('fcrm_fb_events_import_leads_ajax'),
+            'loadingText' => __('Fetching leads...', 'fluentcrm-facebook-events'),
+            'doneText' => __('Import completed.', 'fluentcrm-facebook-events'),
+            'errorText' => __('Import failed. Please check logs for details.', 'fluentcrm-facebook-events'),
+        ]);
     }
 
     public function maybe_show_notice()
@@ -318,6 +355,16 @@ class FCRM_FB_Events_Admin
 
         update_option(FCRM_FB_EVENTS_OPTION_KEY, $settings, false);
 
+        if ($settings['lead_ads']['enabled'] === 'yes' && !empty($settings['lead_ads']['page_id'])) {
+            $lead_ads = fcrm_fb_events_lead_ads();
+            $subscription = $lead_ads->subscribe_page_to_webhook($settings['lead_ads']['page_id']);
+            if (is_wp_error($subscription)) {
+                set_transient('fcrm_fb_events_lead_subscription_notice', $subscription->get_error_message(), 30);
+            } else {
+                set_transient('fcrm_fb_events_lead_subscription_notice', __('Lead Ads webhook subscription updated.', 'fluentcrm-facebook-events'), 30);
+            }
+        }
+
         wp_safe_redirect(add_query_arg(['page' => self::LEAD_SETTINGS_SLUG, 'updated' => 'true'], admin_url('admin.php')));
         exit;
     }
@@ -372,7 +419,38 @@ class FCRM_FB_Events_Admin
 
         check_admin_referer('fcrm_fb_events_import_leads');
 
-        $input = wp_unslash($_POST);
+        $result = $this->run_lead_import(wp_unslash($_POST));
+
+        if (is_wp_error($result)) {
+            set_transient('fcrm_fb_events_lead_import_notice', $result->get_error_message(), 30);
+            wp_safe_redirect(add_query_arg(['page' => self::LEAD_IMPORT_SLUG], admin_url('admin.php')));
+            exit;
+        }
+
+        set_transient('fcrm_fb_events_lead_import_notice', $result['message'], 30);
+
+        wp_safe_redirect(add_query_arg(['page' => self::LEAD_IMPORT_SLUG, 'page_id' => $result['page_id'], 'form_id' => $result['form_id']], admin_url('admin.php')));
+        exit;
+    }
+
+    public function handle_import_leads_ajax()
+    {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('You do not have permission to perform this action.', 'fluentcrm-facebook-events')], 403);
+        }
+
+        check_ajax_referer('fcrm_fb_events_import_leads_ajax', 'nonce');
+
+        $result = $this->run_lead_import(wp_unslash($_POST));
+        if (is_wp_error($result)) {
+            wp_send_json_error(['message' => $result->get_error_message()]);
+        }
+
+        wp_send_json_success($result);
+    }
+
+    private function run_lead_import(array $input)
+    {
         $page_id = sanitize_text_field($input['page_id'] ?? '');
         $form_id = sanitize_text_field($input['form_id'] ?? '');
         $limit = !empty($input['limit']) ? absint($input['limit']) : 50;
@@ -383,6 +461,10 @@ class FCRM_FB_Events_Admin
         $since_timestamp = $since ? strtotime($since . ' 00:00:00') : null;
         $until_timestamp = $until ? strtotime($until . ' 23:59:59') : null;
 
+        if (!$form_id) {
+            return new WP_Error('missing_form', __('Form ID is required.', 'fluentcrm-facebook-events'));
+        }
+
         $lead_ads = fcrm_fb_events_lead_ads();
         $imported = 0;
         $skipped = 0;
@@ -390,54 +472,47 @@ class FCRM_FB_Events_Admin
         $next_cursor = '';
         $pages = 0;
 
-        if (!$form_id) {
-            $errors++;
-        } else {
-            do {
-                $response = $lead_ads->fetch_leads($form_id, [
-                    'limit' => $limit,
-                    'after' => $after ?: null,
-                    'since' => $since_timestamp,
-                    'until' => $until_timestamp,
+        do {
+            $response = $lead_ads->fetch_leads($form_id, [
+                'limit' => $limit,
+                'after' => $after ?: null,
+                'since' => $since_timestamp,
+                'until' => $until_timestamp,
+                'page_id' => $page_id,
+            ]);
+
+            if (is_wp_error($response)) {
+                return new WP_Error('fetch_error', $response->get_error_message());
+            }
+
+            $leads = $response['data'] ?? [];
+            foreach ($leads as $lead) {
+                $result = $lead_ads->import_lead_payload($lead, [
+                    'form_id' => $form_id,
                     'page_id' => $page_id,
+                    'source' => 'manual',
                 ]);
 
-                if (is_wp_error($response)) {
-                    $errors++;
-                    break;
-                }
-
-                $leads = $response['data'] ?? [];
-                foreach ($leads as $lead) {
-                    $result = $lead_ads->import_lead_payload($lead, [
-                        'form_id' => $form_id,
-                        'page_id' => $page_id,
-                        'source' => 'manual',
-                    ]);
-
-                    if (is_wp_error($result)) {
-                        if ($result->get_error_code() === 'duplicate') {
-                            $skipped++;
-                        } else {
-                            $errors++;
-                        }
+                if (is_wp_error($result)) {
+                    if ($result->get_error_code() === 'duplicate') {
+                        $skipped++;
                     } else {
-                        $imported++;
+                        $errors++;
                     }
+                } else {
+                    $imported++;
                 }
+            }
 
-                $next_cursor = $response['paging']['cursors']['after'] ?? '';
-                $after = $next_cursor;
-                $pages++;
-            } while ($after && $pages < 10);
-        }
+            $next_cursor = $response['paging']['cursors']['after'] ?? '';
+            $after = $next_cursor;
+            $pages++;
+        } while ($after && $pages < 10);
 
-        if ($form_id) {
-            $state = get_option(FCRM_FB_EVENTS_LEAD_IMPORT_OPTION, []);
-            $state['forms'] = $state['forms'] ?? [];
-            $state['forms'][$form_id] = current_time('mysql');
-            update_option(FCRM_FB_EVENTS_LEAD_IMPORT_OPTION, $state, false);
-        }
+        $state = get_option(FCRM_FB_EVENTS_LEAD_IMPORT_OPTION, []);
+        $state['forms'] = $state['forms'] ?? [];
+        $state['forms'][$form_id] = current_time('mysql');
+        update_option(FCRM_FB_EVENTS_LEAD_IMPORT_OPTION, $state, false);
 
         $message = sprintf(
             __('Imported %1$d lead(s), skipped %2$d, errors %3$d.', 'fluentcrm-facebook-events'),
@@ -450,10 +525,15 @@ class FCRM_FB_Events_Admin
             $message .= ' ' . sprintf(__('Next cursor: %s', 'fluentcrm-facebook-events'), $next_cursor);
         }
 
-        set_transient('fcrm_fb_events_lead_import_notice', $message, 30);
-
-        wp_safe_redirect(add_query_arg(['page' => self::LEAD_IMPORT_SLUG, 'page_id' => $page_id, 'form_id' => $form_id], admin_url('admin.php')));
-        exit;
+        return [
+            'page_id' => $page_id,
+            'form_id' => $form_id,
+            'imported' => $imported,
+            'skipped' => $skipped,
+            'errors' => $errors,
+            'next_cursor' => $next_cursor,
+            'message' => $message,
+        ];
     }
 
     public function handle_test_connection()
@@ -647,6 +727,10 @@ class FCRM_FB_Events_Admin
         if ($notice) {
             delete_transient('fcrm_fb_events_lead_test_notice');
         }
+        $subscription_notice = get_transient('fcrm_fb_events_lead_subscription_notice');
+        if ($subscription_notice) {
+            delete_transient('fcrm_fb_events_lead_subscription_notice');
+        }
 
         $webhook_url = rest_url(FCRM_FB_Events_Lead_Ads::REST_NAMESPACE . FCRM_FB_Events_Lead_Ads::WEBHOOK_ROUTE);
 
@@ -659,6 +743,10 @@ class FCRM_FB_Events_Admin
 
         if ($notice) {
             echo '<div class="notice notice-info"><p>' . esc_html($notice) . '</p></div>';
+        }
+
+        if ($subscription_notice) {
+            echo '<div class="notice notice-info"><p>' . esc_html($subscription_notice) . '</p></div>';
         }
 
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
@@ -781,6 +869,8 @@ class FCRM_FB_Events_Admin
             echo '<div class="notice notice-error"><p>' . esc_html($pages->get_error_message()) . '</p></div>';
         }
 
+        echo '<div id="fcrm-fb-lead-import-status" class="notice" style="display:none;"><p></p></div>';
+
         echo '<form method="get" action="' . esc_url(admin_url('admin.php')) . '">';
         echo '<input type="hidden" name="page" value="' . esc_attr(self::LEAD_IMPORT_SLUG) . '" />';
         echo '<table class="form-table"><tbody>';
@@ -810,7 +900,7 @@ class FCRM_FB_Events_Admin
 
         if (!is_wp_error($forms) && !empty($forms)) {
             $last_imported = $selected_form ? FCRM_FB_Events_Lead_Store::get_last_import_time($selected_form) : null;
-            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:20px;">';
+            echo '<form id="fcrm-fb-lead-import-form" method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:20px;">';
             echo '<input type="hidden" name="action" value="fcrm_fb_events_import_leads" />';
             wp_nonce_field('fcrm_fb_events_import_leads');
             echo '<input type="hidden" name="page_id" value="' . esc_attr($selected_page) . '" />';
@@ -850,6 +940,11 @@ class FCRM_FB_Events_Admin
             echo '</tbody></table>';
 
             submit_button(__('Fetch Leads', 'fluentcrm-facebook-events'));
+            echo '<div id="fcrm-fb-lead-import-progress" class="fcrm-fb-lead-import-progress" aria-live="polite" style="display:none;">';
+            echo '<span class="spinner is-active"></span>';
+            echo '<span class="fcrm-fb-lead-import-message">' . esc_html__('Preparing lead import...', 'fluentcrm-facebook-events') . '</span>';
+            echo '<div class="fcrm-fb-lead-import-progress-bar"><span></span></div>';
+            echo '</div>';
             echo '</form>';
         }
 

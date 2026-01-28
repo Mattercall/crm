@@ -8,11 +8,16 @@ class FCRM_FB_Events_Lead_Ads
 {
     const REST_NAMESPACE = 'fcrm-facebook-events/v1';
     const WEBHOOK_ROUTE = '/leadgen';
+    const LEADGEN_ACTION = 'fcrm_fb_events_process_leadgen';
+    const LEADGEN_GROUP = 'fcrm_fb_events_lead_ads';
+    const MAX_LEADGEN_ATTEMPTS = 3;
+    const RETRY_DELAY_SECONDS = 300;
 
     public function init()
     {
         add_action('rest_api_init', [$this, 'register_routes']);
         add_filter('rest_pre_serve_request', [$this, 'maybe_serve_raw_challenge'], 10, 4);
+        add_action(self::LEADGEN_ACTION, [$this, 'handle_leadgen_action'], 10, 1);
     }
 
     public function register_routes()
@@ -74,7 +79,7 @@ class FCRM_FB_Events_Lead_Ads
                     continue;
                 }
 
-                $this->process_leadgen($leadgen_id, $form_id, $event_page_id, $created_time, 'webhook');
+                $this->queue_leadgen($leadgen_id, $form_id, $event_page_id, $created_time, 'webhook');
             }
         }
 
@@ -255,6 +260,32 @@ class FCRM_FB_Events_Lead_Ads
         ]);
     }
 
+    public function subscribe_page_to_webhook($page_id)
+    {
+        if (!$page_id) {
+            return new WP_Error('missing_page', __('Page ID is required.', 'fluentcrm-facebook-events'));
+        }
+
+        $page_token = $this->get_page_access_token($page_id);
+        if (!$page_token) {
+            return new WP_Error('missing_token', __('Page access token is required to subscribe the webhook.', 'fluentcrm-facebook-events'));
+        }
+
+        $response = $this->api_request('/' . $page_id . '/subscribed_apps', [
+            'subscribed_fields' => 'leadgen',
+        ], $page_token, 'POST');
+
+        if (is_wp_error($response)) {
+            return $response;
+        }
+
+        if (empty($response['success'])) {
+            return new WP_Error('subscription_failed', __('Unable to subscribe the page to Lead Ads webhook.', 'fluentcrm-facebook-events'));
+        }
+
+        return $response;
+    }
+
     public function import_lead_payload(array $lead, array $context)
     {
         $leadgen_id = $lead['id'] ?? '';
@@ -303,13 +334,17 @@ class FCRM_FB_Events_Lead_Ads
     public function process_leadgen($leadgen_id, $form_id, $page_id, $created_time, $source)
     {
         if (FCRM_FB_Events_Lead_Store::has_lead($leadgen_id)) {
-            return;
+            return true;
+        }
+
+        if (!$leadgen_id) {
+            return new WP_Error('missing_lead', __('Lead ID is required.', 'fluentcrm-facebook-events'));
         }
 
         $lead = $this->fetch_lead($leadgen_id, $page_id);
         if (is_wp_error($lead)) {
             $this->log_event('lead_ads', $leadgen_id, 500, $lead->get_error_message(), false);
-            return;
+            return $lead;
         }
 
         $lead['form_id'] = $lead['form_id'] ?? $form_id;
@@ -317,12 +352,113 @@ class FCRM_FB_Events_Lead_Ads
             $lead['form_id'] = $form_id;
         }
 
-        $this->import_lead_payload($lead, [
+        $result = $this->import_lead_payload($lead, [
             'form_id' => $form_id,
             'page_id' => $page_id,
             'created_time' => $created_time,
             'source' => $source,
         ]);
+
+        return $result;
+    }
+
+    public function queue_leadgen($leadgen_id, $form_id, $page_id, $created_time, $source)
+    {
+        if (!$leadgen_id) {
+            return;
+        }
+
+        if (FCRM_FB_Events_Lead_Store::has_lead($leadgen_id)) {
+            return;
+        }
+
+        $settings = $this->get_lead_settings();
+        if (empty($settings['access_token'])) {
+            $this->log_event('lead_ads', $leadgen_id, 401, 'Missing access token.', false);
+            return;
+        }
+
+        $payload = [
+            'leadgen_id' => $leadgen_id,
+            'form_id' => $form_id,
+            'page_id' => $page_id,
+            'created_time' => $created_time,
+            'source' => $source,
+            'attempt' => 1,
+        ];
+
+        if (function_exists('as_enqueue_async_action')) {
+            if (function_exists('as_next_scheduled_action')) {
+                $next = as_next_scheduled_action(self::LEADGEN_ACTION, [$payload], self::LEADGEN_GROUP);
+                if ($next) {
+                    return;
+                }
+            }
+            as_enqueue_async_action(self::LEADGEN_ACTION, [$payload], self::LEADGEN_GROUP);
+            return;
+        }
+
+        if (!wp_next_scheduled(self::LEADGEN_ACTION, [$payload])) {
+            wp_schedule_single_event(time() + 5, self::LEADGEN_ACTION, [$payload]);
+        }
+    }
+
+    public function handle_leadgen_action($payload)
+    {
+        if (!is_array($payload)) {
+            return;
+        }
+
+        $leadgen_id = $payload['leadgen_id'] ?? '';
+        if (!$leadgen_id) {
+            return;
+        }
+
+        if (FCRM_FB_Events_Lead_Store::has_lead($leadgen_id)) {
+            return;
+        }
+
+        $attempt = !empty($payload['attempt']) ? (int) $payload['attempt'] : 1;
+        $result = $this->process_leadgen(
+            $leadgen_id,
+            $payload['form_id'] ?? '',
+            $payload['page_id'] ?? '',
+            $payload['created_time'] ?? 0,
+            $payload['source'] ?? 'webhook'
+        );
+
+        if (is_wp_error($result)) {
+            $non_retryable = ['missing_email', 'duplicate', 'missing_lead', 'missing_token'];
+            if (!in_array($result->get_error_code(), $non_retryable, true)) {
+                $this->schedule_leadgen_retry($payload, $attempt + 1, $result->get_error_message());
+            }
+        }
+    }
+
+    private function schedule_leadgen_retry(array $payload, $next_attempt, $reason)
+    {
+        if ($next_attempt > self::MAX_LEADGEN_ATTEMPTS) {
+            $this->log_event('lead_ads', $payload['leadgen_id'] ?? '', 500, 'Max retry attempts reached: ' . $reason, false);
+            return;
+        }
+
+        $payload['attempt'] = $next_attempt;
+        $delay = self::RETRY_DELAY_SECONDS * $next_attempt;
+
+        if (function_exists('as_schedule_single_action')) {
+            if (function_exists('as_next_scheduled_action')) {
+                $next = as_next_scheduled_action(self::LEADGEN_ACTION, [$payload], self::LEADGEN_GROUP);
+                if ($next) {
+                    return;
+                }
+            }
+            as_schedule_single_action(time() + $delay, self::LEADGEN_ACTION, [$payload], self::LEADGEN_GROUP);
+            return;
+        }
+
+        if (!wp_next_scheduled(self::LEADGEN_ACTION, [$payload])) {
+            wp_schedule_single_event(time() + $delay, self::LEADGEN_ACTION, [$payload]);
+        }
     }
 
     private function map_lead_to_contact(array $lead)
@@ -517,7 +653,7 @@ class FCRM_FB_Events_Lead_Ads
         return !empty($settings['dedupe_by_phone']) && $settings['dedupe_by_phone'] === 'yes';
     }
 
-    private function api_request($endpoint, array $params = [], $token_override = '')
+    private function api_request($endpoint, array $params = [], $token_override = '', $method = 'GET')
     {
         $settings = $this->get_lead_settings();
         $token = $token_override ?: ($settings['access_token'] ?? '');
@@ -527,11 +663,20 @@ class FCRM_FB_Events_Lead_Ads
 
         $base = 'https://graph.facebook.com/v19.0';
         $params['access_token'] = $token;
-        $url = add_query_arg($params, $base . $endpoint);
+        $method = strtoupper($method);
 
-        $response = wp_remote_get($url, [
-            'timeout' => 20,
-        ]);
+        if ($method === 'POST') {
+            $url = $base . $endpoint;
+            $response = wp_remote_post($url, [
+                'timeout' => 20,
+                'body' => $params,
+            ]);
+        } else {
+            $url = add_query_arg($params, $base . $endpoint);
+            $response = wp_remote_get($url, [
+                'timeout' => 20,
+            ]);
+        }
 
         if (is_wp_error($response)) {
             return $response;

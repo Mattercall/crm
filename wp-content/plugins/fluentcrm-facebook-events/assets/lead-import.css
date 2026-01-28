@@ -1,0 +1,33 @@
+.fcrm-fb-lead-import-progress {
+    align-items: center;
+    display: flex;
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.fcrm-fb-lead-import-progress .spinner {
+    margin: 0;
+    float: none;
+    visibility: visible;
+}
+
+.fcrm-fb-lead-import-progress-bar {
+    background: #dcdcde;
+    border-radius: 999px;
+    flex: 0 0 160px;
+    height: 6px;
+    overflow: hidden;
+    position: relative;
+}
+
+.fcrm-fb-lead-import-progress-bar span {
+    background: #2271b1;
+    display: block;
+    height: 100%;
+    transition: width 0.3s ease;
+    width: 0;
+}
+
+.fcrm-fb-lead-import-message {
+    font-weight: 500;
+}
