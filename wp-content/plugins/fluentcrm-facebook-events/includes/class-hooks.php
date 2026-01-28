@@ -20,17 +20,8 @@ class FCRM_FB_Events_Hooks
         add_action('fluent_crm/contact_removed_from_tags', [$this, 'handle_tags_removed'], 10, 2);
         add_action('fluentcrm_contact_removed_from_tags', [$this, 'handle_tags_removed_legacy'], 10, 2);
 
-        add_action('fluent_crm/contact_added_to_lists', [$this, 'handle_lists_added'], 10, 2);
-        add_action('fluentcrm_contact_added_to_lists', [$this, 'handle_lists_added_legacy'], 10, 2);
-
-        add_action('fluent_crm/contact_removed_from_lists', [$this, 'handle_lists_removed'], 10, 2);
-        add_action('fluentcrm_contact_removed_from_lists', [$this, 'handle_lists_removed_legacy'], 10, 2);
-
         add_action('fluent_crm/contact_created', [$this, 'handle_contact_created'], 10, 1);
         add_action('fluentcrm_contact_created', [$this, 'handle_contact_created'], 10, 1);
-
-        add_action('fluent_crm/contact_updated', [$this, 'handle_contact_updated'], 10, 2);
-        add_action('fluentcrm_contact_updated', [$this, 'handle_contact_updated'], 10, 2);
 
         add_action('fluent_crm/email_opened', [$this, 'handle_email_opened'], 10, 1);
         add_action('fluent_crm/email_url_clicked', [$this, 'handle_email_clicked'], 10, 2);
@@ -81,44 +72,9 @@ class FCRM_FB_Events_Hooks
         ]);
     }
 
-    public function handle_lists_added($subscriber, $listIds)
-    {
-        $this->handle_contact_event('list_subscribed', $subscriber, [
-            'list_ids' => (array) $listIds,
-        ]);
-    }
-
-    public function handle_lists_added_legacy($listIds, $subscriber)
-    {
-        $this->handle_contact_event('list_subscribed', $subscriber, [
-            'list_ids' => (array) $listIds,
-        ]);
-    }
-
-    public function handle_lists_removed($subscriber, $listIds)
-    {
-        $this->handle_contact_event('list_unsubscribed', $subscriber, [
-            'list_ids' => (array) $listIds,
-        ]);
-    }
-
-    public function handle_lists_removed_legacy($listIds, $subscriber)
-    {
-        $this->handle_contact_event('list_unsubscribed', $subscriber, [
-            'list_ids' => (array) $listIds,
-        ]);
-    }
-
     public function handle_contact_created($subscriber)
     {
         $this->handle_contact_event('contact_created', $subscriber, []);
-    }
-
-    public function handle_contact_updated($subscriber, $dirtyFields)
-    {
-        $this->handle_contact_event('contact_updated', $subscriber, [
-            'dirty_fields' => (array) $dirtyFields,
-        ]);
     }
 
     public function handle_email_opened($campaignEmail)
@@ -179,6 +135,10 @@ class FCRM_FB_Events_Hooks
             return;
         }
 
+        if (in_array($trigger, ['tag_applied', 'tag_removed'], true) && !$this->tag_event_matches_selection($trigger, $context)) {
+            return;
+        }
+
         $action_time = current_time('timestamp', true);
         $dedupe_key = md5($trigger . '|' . $subscriber->id . '|' . wp_json_encode($context) . '|' . $action_time);
         if (isset($this->processed[$dedupe_key])) {
@@ -195,5 +155,22 @@ class FCRM_FB_Events_Hooks
 
         $queue = new FCRM_FB_Events_Queue();
         $queue->dispatch($payload, $trigger, $subscriber);
+    }
+
+    private function tag_event_matches_selection($trigger, array $context)
+    {
+        $settings = FCRM_FB_Events_Admin::get_settings();
+        $mapping = $settings['mappings'][$trigger] ?? [];
+        $selected_tags = array_filter(array_map('absint', (array) ($mapping['tag_ids'] ?? [])));
+        if (empty($selected_tags)) {
+            return false;
+        }
+
+        $event_tags = array_filter(array_map('absint', (array) ($context['tag_ids'] ?? [])));
+        if (empty($event_tags)) {
+            return false;
+        }
+
+        return (bool) array_intersect($selected_tags, $event_tags);
     }
 }
