@@ -202,9 +202,10 @@ class FCRM_FB_Events_Lead_Ads
             return [];
         }
 
+        $page_token = $this->get_page_access_token($page_id);
         $response = $this->api_request('/' . $page_id . '/leadgen_forms', [
             'fields' => 'id,name,created_time,status',
-        ]);
+        ], $page_token);
 
         if (is_wp_error($response)) {
             return $response;
@@ -227,18 +228,24 @@ class FCRM_FB_Events_Lead_Ads
             'until' => $args['until'] ?? null,
         ]);
 
-        return $this->api_request('/' . $form_id . '/leads', $params);
+        $page_token = '';
+        if (!empty($args['page_id'])) {
+            $page_token = $this->get_page_access_token($args['page_id']);
+        }
+
+        return $this->api_request('/' . $form_id . '/leads', $params, $page_token);
     }
 
-    public function fetch_lead($leadgen_id)
+    public function fetch_lead($leadgen_id, $page_id = '')
     {
         if (!$leadgen_id) {
             return new WP_Error('missing_lead', __('Lead ID is required.', 'fluentcrm-facebook-events'));
         }
 
+        $page_token = $this->get_page_access_token($page_id);
         return $this->api_request('/' . $leadgen_id, [
             'fields' => 'id,created_time,field_data,form_id,ad_id,adgroup_id,campaign_id,platform',
-        ]);
+        ], $page_token);
     }
 
     public function test_connection()
@@ -299,7 +306,7 @@ class FCRM_FB_Events_Lead_Ads
             return;
         }
 
-        $lead = $this->fetch_lead($leadgen_id);
+        $lead = $this->fetch_lead($leadgen_id, $page_id);
         if (is_wp_error($lead)) {
             $this->log_event('lead_ads', $leadgen_id, 500, $lead->get_error_message(), false);
             return;
@@ -510,10 +517,10 @@ class FCRM_FB_Events_Lead_Ads
         return !empty($settings['dedupe_by_phone']) && $settings['dedupe_by_phone'] === 'yes';
     }
 
-    private function api_request($endpoint, array $params = [])
+    private function api_request($endpoint, array $params = [], $token_override = '')
     {
         $settings = $this->get_lead_settings();
-        $token = $settings['access_token'] ?? '';
+        $token = $token_override ?: ($settings['access_token'] ?? '');
         if (!$token) {
             return new WP_Error('missing_token', __('Access token is required.', 'fluentcrm-facebook-events'));
         }
@@ -540,6 +547,26 @@ class FCRM_FB_Events_Lead_Ads
         }
 
         return is_array($decoded) ? $decoded : [];
+    }
+
+    private function get_page_access_token($page_id)
+    {
+        if (!$page_id) {
+            return '';
+        }
+
+        $pages = $this->get_pages();
+        if (is_wp_error($pages)) {
+            return '';
+        }
+
+        foreach ($pages as $page) {
+            if (!empty($page['id']) && $page['id'] === $page_id && !empty($page['access_token'])) {
+                return $page['access_token'];
+            }
+        }
+
+        return '';
     }
 
     private function log_event($trigger, $identifier, $status, $response, $success)

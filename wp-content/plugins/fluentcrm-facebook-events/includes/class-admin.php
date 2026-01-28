@@ -399,6 +399,7 @@ class FCRM_FB_Events_Admin
                     'after' => $after ?: null,
                     'since' => $since_timestamp,
                     'until' => $until_timestamp,
+                    'page_id' => $page_id,
                 ]);
 
                 if (is_wp_error($response)) {
