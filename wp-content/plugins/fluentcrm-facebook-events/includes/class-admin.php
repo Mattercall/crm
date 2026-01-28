@@ -25,24 +25,14 @@ class FCRM_FB_Events_Admin
     {
         $capability = 'manage_options';
 
-        if (self::fluentcrm_active()) {
-            add_submenu_page(
-                'fluentcrm-admin',
-                __('Facebook Events', 'fluentcrm-facebook-events'),
-                __('Facebook Events', 'fluentcrm-facebook-events'),
-                $capability,
-                self::SETTINGS_SLUG,
-                [$this, 'render_settings_page']
-            );
-        } else {
-            add_options_page(
-                __('Facebook Events', 'fluentcrm-facebook-events'),
-                __('Facebook Events', 'fluentcrm-facebook-events'),
-                $capability,
-                self::SETTINGS_SLUG,
-                [$this, 'render_settings_page']
-            );
-        }
+        add_menu_page(
+            __('Facebook Events', 'fluentcrm-facebook-events'),
+            __('Facebook Events', 'fluentcrm-facebook-events'),
+            $capability,
+            self::SETTINGS_SLUG,
+            [$this, 'render_settings_page'],
+            'dashicons-facebook-alt'
+        );
     }
 
     public function maybe_show_notice()
