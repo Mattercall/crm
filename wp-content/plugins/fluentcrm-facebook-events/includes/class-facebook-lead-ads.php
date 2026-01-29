@@ -473,7 +473,7 @@ class FCRM_FB_Events_Lead_Ads
     {
         $settings = $this->get_lead_settings();
         $mapping = $this->get_lead_field_mapping();
-        $lead_fields = $this->normalize_lead_fields($lead['field_data'] ?? [], $lead['id'] ?? '');
+        $lead_fields = $this->normalize_lead_fields($lead['field_data'] ?? []);
 
         $contact = [];
         $custom_values = [];
@@ -634,7 +634,7 @@ class FCRM_FB_Events_Lead_Ads
         ]);
     }
 
-    private function normalize_lead_fields(array $field_data, $lead_id = '')
+    private function normalize_lead_fields(array $field_data)
     {
         $fields = [];
 
@@ -650,13 +650,6 @@ class FCRM_FB_Events_Lead_Ads
             }
 
             $fields[$name] = $value;
-        }
-
-        if ($lead_id) {
-            $fields['lead_id'] = $lead_id;
-            if (!isset($fields['leadgen_id'])) {
-                $fields['leadgen_id'] = $lead_id;
-            }
         }
 
         return $fields;
