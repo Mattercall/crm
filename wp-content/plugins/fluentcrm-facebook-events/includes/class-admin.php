@@ -187,6 +187,7 @@ class FCRM_FB_Events_Admin
                 'page_id' => '',
                 'ad_account_id' => '',
                 'verify_token' => '',
+                'form_ids' => [],
                 'missing_email_action' => 'skip',
                 'contact_status' => 'subscribed',
                 'dedupe_by_phone' => 'no',
@@ -344,6 +345,7 @@ class FCRM_FB_Events_Admin
             'page_id' => sanitize_text_field($input['page_id'] ?? ''),
             'ad_account_id' => sanitize_text_field($input['ad_account_id'] ?? ''),
             'verify_token' => sanitize_text_field($input['verify_token'] ?? ''),
+            'form_ids' => array_values(array_filter(array_map('sanitize_text_field', (array) ($input['form_ids'] ?? [])))),
             'missing_email_action' => in_array(($input['missing_email_action'] ?? 'skip'), ['skip', 'phone_only'], true) ? $input['missing_email_action'] : 'skip',
             'contact_status' => in_array(($input['contact_status'] ?? 'subscribed'), ['subscribed', 'pending'], true) ? $input['contact_status'] : 'subscribed',
             'dedupe_by_phone' => !empty($input['dedupe_by_phone']) ? 'yes' : 'no',
@@ -482,6 +484,7 @@ class FCRM_FB_Events_Admin
             ]);
 
             if (is_wp_error($response)) {
+                $this->log_lead_import_error($response, $form_id, $page_id);
                 return new WP_Error('fetch_error', $response->get_error_message());
             }
 
@@ -720,6 +723,7 @@ class FCRM_FB_Events_Admin
 
         $settings = self::get_settings();
         $lead_settings = $settings['lead_ads'];
+        $lead_ads = fcrm_fb_events_lead_ads();
         $updated = !empty($_GET['updated']);
         $tags = $this->get_available_tags();
         $lists = $this->get_available_lists();
@@ -733,6 +737,12 @@ class FCRM_FB_Events_Admin
         }
 
         $webhook_url = rest_url(FCRM_FB_Events_Lead_Ads::REST_NAMESPACE . FCRM_FB_Events_Lead_Ads::WEBHOOK_ROUTE);
+        $pages = $lead_ads->get_pages();
+        $forms = [];
+        $selected_page_id = $lead_settings['page_id'] ?? '';
+        if (!is_wp_error($pages) && $selected_page_id) {
+            $forms = $lead_ads->get_forms($selected_page_id);
+        }
 
         echo '<div class="wrap">';
         echo '<h1>' . esc_html__('Facebook Lead Ads Settings', 'fluentcrm-facebook-events') . '</h1>';
@@ -758,13 +768,51 @@ class FCRM_FB_Events_Admin
         $this->render_text_row('app_id', __('Facebook App ID (optional)', 'fluentcrm-facebook-events'), $lead_settings['app_id']);
         $this->render_text_row('app_secret', __('Facebook App Secret (optional)', 'fluentcrm-facebook-events'), $lead_settings['app_secret']);
         $this->render_text_row('lead_access_token', __('Access Token', 'fluentcrm-facebook-events'), $lead_settings['access_token']);
-        $this->render_text_row('page_id', __('Default Page ID (optional)', 'fluentcrm-facebook-events'), $lead_settings['page_id']);
+        echo '<tr>';
+        echo '<th scope="row">' . esc_html__('Facebook Page', 'fluentcrm-facebook-events') . '</th>';
+        echo '<td>';
+        if (!is_wp_error($pages) && !empty($pages)) {
+            echo '<select name="page_id">';
+            echo '<option value="">' . esc_html__('Select Page', 'fluentcrm-facebook-events') . '</option>';
+            foreach ($pages as $page) {
+                $selected = ($selected_page_id && $selected_page_id === $page['id']);
+                echo '<option value="' . esc_attr($page['id']) . '" ' . selected(true, $selected, false) . '>' . esc_html($page['name']) . '</option>';
+            }
+            echo '</select>';
+        } else {
+            echo '<input type="text" class="regular-text" name="page_id" value="' . esc_attr($selected_page_id) . '" />';
+            echo '<p class="description">' . esc_html__('Enter the Page ID if pages cannot be loaded.', 'fluentcrm-facebook-events') . '</p>';
+        }
+        echo '</td>';
+        echo '</tr>';
         $this->render_text_row('ad_account_id', __('Ad Account ID (optional)', 'fluentcrm-facebook-events'), $lead_settings['ad_account_id']);
         $this->render_text_row('verify_token', __('Webhook Verify Token', 'fluentcrm-facebook-events'), $lead_settings['verify_token']);
 
         echo '<tr>';
         echo '<th scope="row">' . esc_html__('Webhook URL', 'fluentcrm-facebook-events') . '</th>';
         echo '<td><code>' . esc_html($webhook_url) . '</code></td>';
+        echo '</tr>';
+
+        echo '<tr>';
+        echo '<th scope="row">' . esc_html__('Lead Forms', 'fluentcrm-facebook-events') . '</th>';
+        echo '<td>';
+        if (is_wp_error($pages)) {
+            echo '<em>' . esc_html($pages->get_error_message()) . '</em>';
+        } elseif (is_wp_error($forms)) {
+            echo '<em>' . esc_html($forms->get_error_message()) . '</em>';
+        } elseif (!empty($forms)) {
+            $selected_forms = (array) ($lead_settings['form_ids'] ?? []);
+            echo '<select name="form_ids[]" multiple="multiple" size="6">';
+            foreach ($forms as $form) {
+                $selected = in_array($form['id'], $selected_forms, true);
+                echo '<option value="' . esc_attr($form['id']) . '" ' . selected(true, $selected, false) . '>' . esc_html($form['name']) . '</option>';
+            }
+            echo '</select>';
+            echo '<p class="description">' . esc_html__('Select one or more forms to sync leads in real time. Leave blank to accept all forms.', 'fluentcrm-facebook-events') . '</p>';
+        } else {
+            echo '<em>' . esc_html__('Select a page and save to load available forms.', 'fluentcrm-facebook-events') . '</em>';
+        }
+        echo '</td>';
         echo '</tr>';
 
         echo '<tr>';
@@ -1079,6 +1127,29 @@ class FCRM_FB_Events_Admin
         echo '<th scope="row">' . esc_html($label) . '</th>';
         echo '<td><input type="text" class="regular-text" name="' . esc_attr($name) . '" value="' . esc_attr($value) . '" /></td>';
         echo '</tr>';
+    }
+
+    private function log_lead_import_error(WP_Error $error, $form_id, $page_id)
+    {
+        $details = $error->get_error_data();
+        $response = $error->get_error_message();
+
+        if (!empty($details)) {
+            $response = wp_json_encode([
+                'message' => $error->get_error_message(),
+                'details' => $details,
+            ]);
+        }
+
+        FCRM_FB_Events_Logger::add_log([
+            'trigger' => 'lead_ads',
+            'contact_id' => 0,
+            'email' => $form_id ? ('form:' . $form_id) : '',
+            'event_name' => 'lead_import',
+            'status_code' => 500,
+            'response' => $response,
+            'success' => false,
+        ]);
     }
 
     private function get_available_tags()

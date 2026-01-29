@@ -53,7 +53,7 @@ class FCRM_FB_Events_Logger
                 'email' => sanitize_email($entry['email'] ?? ''),
                 'event_name' => sanitize_text_field($entry['event_name']),
                 'status_code' => (int) $entry['status_code'],
-                'response' => sanitize_text_field($entry['response'] ?? ''),
+                'response' => sanitize_textarea_field($entry['response'] ?? ''),
                 'success' => !empty($entry['success']) ? 1 : 0,
             ],
             [
