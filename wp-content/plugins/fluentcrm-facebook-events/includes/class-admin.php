@@ -1016,6 +1016,7 @@ class FCRM_FB_Events_Admin
             'last_name' => __('Last Name', 'fluentcrm-facebook-events'),
             'phone_number' => __('Phone Number', 'fluentcrm-facebook-events'),
             'phone' => __('Phone', 'fluentcrm-facebook-events'),
+            'leadgen_id' => __('Lead ID', 'fluentcrm-facebook-events'),
             'company_name' => __('Company', 'fluentcrm-facebook-events'),
             'city' => __('City', 'fluentcrm-facebook-events'),
             'state' => __('State', 'fluentcrm-facebook-events'),
