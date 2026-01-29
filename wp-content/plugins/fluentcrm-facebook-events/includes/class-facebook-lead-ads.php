@@ -506,6 +506,10 @@ class FCRM_FB_Events_Lead_Ads
             }
         }
 
+        if (!empty($lead_fields['lead_id'])) {
+            $custom_values['lead_id'] = $lead_fields['lead_id'];
+        }
+
         if (empty($contact['first_name']) && empty($contact['last_name']) && !empty($contact['full_name'])) {
             $parts = explode(' ', $contact['full_name'], 2);
             $contact['first_name'] = $parts[0];
@@ -654,6 +658,12 @@ class FCRM_FB_Events_Lead_Ads
         }
 
         $leadgen_id = $lead['id'] ?? '';
+        if (!$leadgen_id && !empty($fields['leadgen_id'])) {
+            $leadgen_id = $fields['leadgen_id'];
+        }
+        if (!$leadgen_id && !empty($fields['lead_id'])) {
+            $leadgen_id = $fields['lead_id'];
+        }
         if ($leadgen_id) {
             $fields['lead_id'] = $leadgen_id;
             $fields['leadgen_id'] = $leadgen_id;
