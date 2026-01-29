@@ -317,8 +317,24 @@ class FCRM_FB_Events_Lead_Ads
         }
 
         if (!empty($leadgen_id)) {
-            $contact_data['custom_values']['leadgen_id'] = $leadgen_id;
-            $contact_data['custom_values']['lead_id'] = $leadgen_id;
+            $mapping = $this->get_lead_field_mapping();
+            $lead_id_keys = [
+                $mapping['lead_id'] ?? '',
+                $mapping['leadgen_id'] ?? '',
+                'lead_id',
+                'leadgen_id',
+            ];
+
+            foreach ($lead_id_keys as $lead_id_key) {
+                $lead_id_key = sanitize_key($lead_id_key);
+                if (!$lead_id_key) {
+                    continue;
+                }
+
+                if (empty($contact_data['custom_values'][$lead_id_key])) {
+                    $contact_data['custom_values'][$lead_id_key] = $leadgen_id;
+                }
+            }
         }
 
         $contact = $this->upsert_contact($contact_data['contact'], $contact_data['custom_values']);
