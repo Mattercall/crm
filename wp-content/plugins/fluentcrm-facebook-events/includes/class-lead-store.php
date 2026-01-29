@@ -6,6 +6,8 @@ if (!defined('ABSPATH')) {
 
 class FCRM_FB_Events_Lead_Store
 {
+    private static $table_ready = false;
+
     public static function table_name()
     {
         global $wpdb;
@@ -17,12 +19,27 @@ class FCRM_FB_Events_Lead_Store
     {
         global $wpdb;
 
+        if (self::$table_ready) {
+            return;
+        }
+
         $table = self::table_name();
         $exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
 
         if ($exists !== $table) {
             self::create_table();
+            self::$table_ready = true;
+            return;
         }
+
+        $column = $wpdb->get_var(
+            $wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", 'webhook_payload')
+        );
+        if (!$column) {
+            self::create_table();
+        }
+
+        self::$table_ready = true;
     }
 
     public static function create_table()
@@ -40,6 +57,7 @@ class FCRM_FB_Events_Lead_Store
             contact_id BIGINT UNSIGNED NULL,
             source VARCHAR(32) NOT NULL DEFAULT 'webhook',
             lead_time DATETIME NULL,
+            webhook_payload LONGTEXT NULL,
             created_at DATETIME NOT NULL,
             PRIMARY KEY (id),
             UNIQUE KEY leadgen_id (leadgen_id),
@@ -85,6 +103,7 @@ class FCRM_FB_Events_Lead_Store
                 'contact_id' => !empty($data['contact_id']) ? (int) $data['contact_id'] : null,
                 'source' => sanitize_text_field($data['source'] ?? 'webhook'),
                 'lead_time' => !empty($data['lead_time']) ? gmdate('Y-m-d H:i:s', (int) $data['lead_time']) : null,
+                'webhook_payload' => $data['webhook_payload'] ?? null,
                 'created_at' => current_time('mysql'),
             ],
             [
@@ -92,6 +111,7 @@ class FCRM_FB_Events_Lead_Store
                 '%s',
                 '%s',
                 '%d',
+                '%s',
                 '%s',
                 '%s',
                 '%s',
