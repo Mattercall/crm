@@ -477,6 +477,11 @@ class FCRM_FB_Events_Lead_Ads
 
         $contact = [];
         $custom_values = [];
+        $missing_fields = [];
+
+        if (empty($lead_fields['lead_id'])) {
+            $this->log_event('lead_ads', $lead['id'] ?? '', 422, 'Missing lead_id in lead payload.', false);
+        }
 
         foreach ($mapping as $fb_field => $fluent_field) {
             $fb_field = sanitize_key($fb_field);
@@ -487,6 +492,7 @@ class FCRM_FB_Events_Lead_Ads
             }
 
             if (!isset($lead_fields[$fb_field])) {
+                $missing_fields[] = $fb_field;
                 continue;
             }
 
@@ -504,6 +510,17 @@ class FCRM_FB_Events_Lead_Ads
             } else {
                 $custom_values[$fluent_field] = $value;
             }
+        }
+
+        if (!empty($missing_fields)) {
+            $missing_fields = array_unique($missing_fields);
+            $this->log_event(
+                'lead_ads',
+                $lead['id'] ?? '',
+                200,
+                'Missing mapped lead field(s): ' . implode(', ', $missing_fields),
+                true
+            );
         }
 
         if (empty($contact['first_name']) && empty($contact['last_name']) && !empty($contact['full_name'])) {
@@ -559,6 +576,10 @@ class FCRM_FB_Events_Lead_Ads
                 $payload = $contact_data;
                 if (!empty($custom_values)) {
                     $payload['custom_values'] = $custom_values;
+                    $payload['custom_fields'] = $custom_values;
+                    $payload['meta'] = array_merge((array) ($payload['meta'] ?? []), [
+                        'custom_fields' => $custom_values,
+                    ]);
                 }
                 $contact = $service->createOrUpdate($payload);
             }
@@ -653,10 +674,19 @@ class FCRM_FB_Events_Lead_Ads
             $fields[$name] = $value;
         }
 
-        $leadgen_id = $lead['id'] ?? '';
-        if ($leadgen_id) {
-            $fields['lead_id'] = $leadgen_id;
-            $fields['leadgen_id'] = $leadgen_id;
+        $lead_id = '';
+        if (!empty($fields['lead_id'])) {
+            $lead_id = $fields['lead_id'];
+        } elseif (!empty($fields['leadgen_id'])) {
+            $lead_id = $fields['leadgen_id'];
+        } elseif (!empty($lead['id'])) {
+            $lead_id = $lead['id'];
+        }
+
+        if ($lead_id) {
+            $fields['lead_id'] = $lead_id;
+            $fields['leadgen_id'] = $lead_id;
+            $fields['facebook_lead_id'] = $lead_id;
         }
 
         return $fields;
