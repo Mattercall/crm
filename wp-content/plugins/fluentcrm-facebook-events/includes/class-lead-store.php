@@ -13,6 +13,18 @@ class FCRM_FB_Events_Lead_Store
         return $wpdb->prefix . FCRM_FB_EVENTS_LEAD_TABLE;
     }
 
+    private static function ensure_table_exists()
+    {
+        global $wpdb;
+
+        $table = self::table_name();
+        $exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
+
+        if ($exists !== $table) {
+            self::create_table();
+        }
+    }
+
     public static function create_table()
     {
         global $wpdb;
@@ -47,6 +59,7 @@ class FCRM_FB_Events_Lead_Store
             return false;
         }
 
+        self::ensure_table_exists();
         $table = self::table_name();
         $existing = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$table} WHERE leadgen_id = %s LIMIT 1", $leadgen_id));
 
@@ -61,6 +74,7 @@ class FCRM_FB_Events_Lead_Store
             return false;
         }
 
+        self::ensure_table_exists();
         $table = self::table_name();
         $result = $wpdb->insert(
             $table,
@@ -95,6 +109,7 @@ class FCRM_FB_Events_Lead_Store
             return null;
         }
 
+        self::ensure_table_exists();
         $table = self::table_name();
         $time = $wpdb->get_var(
             $wpdb->prepare("SELECT MAX(lead_time) FROM {$table} WHERE form_id = %s", $form_id)
