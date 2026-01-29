@@ -201,6 +201,7 @@ class FCRM_FB_Events_Admin
                 'last_name' => 'last_name',
                 'phone_number' => 'phone',
                 'phone' => 'phone',
+                'lead_id' => '',
             ],
             'mappings' => [
                 'tag_applied' => [
@@ -581,7 +582,7 @@ class FCRM_FB_Events_Admin
         }
 
         $settings = self::get_settings();
-        $logs = FCRM_FB_Events_Logger::get_logs(100);
+        $logs = FCRM_FB_Events_Logger::get_logs(50);
         $updated = !empty($_GET['updated']);
         $tags = $this->get_available_tags();
         $event_options = [
@@ -685,7 +686,7 @@ class FCRM_FB_Events_Admin
         echo '</form>';
 
         echo '<h2>' . esc_html__('Recent Logs', 'fluentcrm-facebook-events') . '</h2>';
-        echo '<p>' . esc_html__('Shows the most recent 100 attempts.', 'fluentcrm-facebook-events') . '</p>';
+        echo '<p>' . esc_html__('Shows the most recent 50 attempts.', 'fluentcrm-facebook-events') . '</p>';
         echo '<table class="widefat striped">';
         echo '<thead><tr>';
         echo '<th>' . esc_html__('Time', 'fluentcrm-facebook-events') . '</th>';
@@ -1016,6 +1017,7 @@ class FCRM_FB_Events_Admin
             'last_name' => __('Last Name', 'fluentcrm-facebook-events'),
             'phone_number' => __('Phone Number', 'fluentcrm-facebook-events'),
             'phone' => __('Phone', 'fluentcrm-facebook-events'),
+            'lead_id' => __('Lead ID', 'fluentcrm-facebook-events'),
             'company_name' => __('Company', 'fluentcrm-facebook-events'),
             'city' => __('City', 'fluentcrm-facebook-events'),
             'state' => __('State', 'fluentcrm-facebook-events'),
@@ -1079,11 +1081,11 @@ class FCRM_FB_Events_Admin
             return;
         }
 
-        $logs = FCRM_FB_Events_Logger::get_logs(100, 'lead_ads');
+        $logs = FCRM_FB_Events_Logger::get_logs(50, 'lead_ads');
 
         echo '<div class="wrap">';
         echo '<h1>' . esc_html__('Facebook Lead Ads Logs', 'fluentcrm-facebook-events') . '</h1>';
-        echo '<p>' . esc_html__('Shows the most recent 100 imports and webhook attempts.', 'fluentcrm-facebook-events') . '</p>';
+        echo '<p>' . esc_html__('Shows the most recent 50 imports and webhook attempts.', 'fluentcrm-facebook-events') . '</p>';
         echo '<table class="widefat striped">';
         echo '<thead><tr>';
         echo '<th>' . esc_html__('Time', 'fluentcrm-facebook-events') . '</th>';
