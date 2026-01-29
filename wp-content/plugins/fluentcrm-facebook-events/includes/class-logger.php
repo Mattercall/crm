@@ -6,6 +6,8 @@ if (!defined('ABSPATH')) {
 
 class FCRM_FB_Events_Logger
 {
+    const MAX_LOGS = 50;
+
     public static function table_name()
     {
         global $wpdb;
@@ -69,8 +71,8 @@ class FCRM_FB_Events_Logger
         );
 
         $count = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
-        if ($count > 100) {
-            $ids = $wpdb->get_col($wpdb->prepare("SELECT id FROM {$table} ORDER BY id DESC LIMIT %d", 100));
+        if ($count > self::MAX_LOGS) {
+            $ids = $wpdb->get_col($wpdb->prepare("SELECT id FROM {$table} ORDER BY id DESC LIMIT %d", self::MAX_LOGS));
             if (!empty($ids)) {
                 $placeholders = implode(',', array_fill(0, count($ids), '%d'));
                 $wpdb->query($wpdb->prepare("DELETE FROM {$table} WHERE id NOT IN ({$placeholders})", $ids));
@@ -78,7 +80,7 @@ class FCRM_FB_Events_Logger
         }
     }
 
-    public static function get_logs($limit = 100, $trigger = null)
+    public static function get_logs($limit = self::MAX_LOGS, $trigger = null)
     {
         global $wpdb;
 

@@ -191,6 +191,7 @@ class FCRM_FB_Events_Admin
                 'missing_email_action' => 'skip',
                 'contact_status' => 'subscribed',
                 'dedupe_by_phone' => 'no',
+                'test_mode' => 'no',
                 'tag_ids' => [],
                 'list_ids' => [],
             ],
@@ -201,6 +202,7 @@ class FCRM_FB_Events_Admin
                 'last_name' => 'last_name',
                 'phone_number' => 'phone',
                 'phone' => 'phone',
+                'lead_id' => '',
             ],
             'mappings' => [
                 'tag_applied' => [
@@ -349,6 +351,7 @@ class FCRM_FB_Events_Admin
             'missing_email_action' => in_array(($input['missing_email_action'] ?? 'skip'), ['skip', 'phone_only'], true) ? $input['missing_email_action'] : 'skip',
             'contact_status' => in_array(($input['contact_status'] ?? 'subscribed'), ['subscribed', 'pending'], true) ? $input['contact_status'] : 'subscribed',
             'dedupe_by_phone' => !empty($input['dedupe_by_phone']) ? 'yes' : 'no',
+            'test_mode' => !empty($input['test_mode']) ? 'yes' : 'no',
             'tag_ids' => array_values(array_filter(array_map('absint', (array) ($input['tag_ids'] ?? [])))),
             'list_ids' => array_values(array_filter(array_map('absint', (array) ($input['list_ids'] ?? [])))),
         ];
@@ -836,6 +839,7 @@ class FCRM_FB_Events_Admin
         echo '</tr>';
 
         $this->render_checkbox_row('dedupe_by_phone', __('Dedupe by phone when email missing', 'fluentcrm-facebook-events'), $lead_settings['dedupe_by_phone'] === 'yes');
+        $this->render_checkbox_row('test_mode', __('Enable Test Mode (re-import deleted leads)', 'fluentcrm-facebook-events'), $lead_settings['test_mode'] === 'yes');
 
         echo '<tr>';
         echo '<th scope="row">' . esc_html__('Apply Tags', 'fluentcrm-facebook-events') . '</th>';
@@ -1016,6 +1020,7 @@ class FCRM_FB_Events_Admin
             'last_name' => __('Last Name', 'fluentcrm-facebook-events'),
             'phone_number' => __('Phone Number', 'fluentcrm-facebook-events'),
             'phone' => __('Phone', 'fluentcrm-facebook-events'),
+            'lead_id' => __('Lead ID', 'fluentcrm-facebook-events'),
             'company_name' => __('Company', 'fluentcrm-facebook-events'),
             'city' => __('City', 'fluentcrm-facebook-events'),
             'state' => __('State', 'fluentcrm-facebook-events'),
@@ -1079,11 +1084,11 @@ class FCRM_FB_Events_Admin
             return;
         }
 
-        $logs = FCRM_FB_Events_Logger::get_logs(100, 'lead_ads');
+        $logs = FCRM_FB_Events_Logger::get_logs(50, 'lead_ads');
 
         echo '<div class="wrap">';
         echo '<h1>' . esc_html__('Facebook Lead Ads Logs', 'fluentcrm-facebook-events') . '</h1>';
-        echo '<p>' . esc_html__('Shows the most recent 100 imports and webhook attempts.', 'fluentcrm-facebook-events') . '</p>';
+        echo '<p>' . esc_html__('Shows the most recent 50 imports and webhook attempts.', 'fluentcrm-facebook-events') . '</p>';
         echo '<table class="widefat striped">';
         echo '<thead><tr>';
         echo '<th>' . esc_html__('Time', 'fluentcrm-facebook-events') . '</th>';
