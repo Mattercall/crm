@@ -76,7 +76,7 @@ class FCRM_FB_Events_Lead_Store
 
         self::ensure_table_exists();
         $table = self::table_name();
-        $result = $wpdb->insert(
+        $result = $wpdb->replace(
             $table,
             [
                 'leadgen_id' => sanitize_text_field($data['leadgen_id']),
@@ -99,6 +99,24 @@ class FCRM_FB_Events_Lead_Store
         );
 
         return (bool) $result;
+    }
+
+    public static function get_lead($leadgen_id)
+    {
+        global $wpdb;
+
+        if (!$leadgen_id) {
+            return null;
+        }
+
+        self::ensure_table_exists();
+        $table = self::table_name();
+        $row = $wpdb->get_row(
+            $wpdb->prepare("SELECT * FROM {$table} WHERE leadgen_id = %s LIMIT 1", $leadgen_id),
+            ARRAY_A
+        );
+
+        return $row ?: null;
     }
 
     public static function get_last_import_time($form_id)

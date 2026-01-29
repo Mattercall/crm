@@ -301,7 +301,7 @@ class FCRM_FB_Events_Lead_Ads
             return new WP_Error('missing_lead', __('Lead ID missing.', 'fluentcrm-facebook-events'));
         }
 
-        if (FCRM_FB_Events_Lead_Store::has_lead($leadgen_id)) {
+        if ($this->should_skip_existing_lead($leadgen_id, $context)) {
             return new WP_Error('duplicate', __('Lead already imported.', 'fluentcrm-facebook-events'));
         }
 
@@ -473,7 +473,7 @@ class FCRM_FB_Events_Lead_Ads
     {
         $settings = $this->get_lead_settings();
         $mapping = $this->get_lead_field_mapping();
-        $lead_fields = $this->normalize_lead_fields($lead['field_data'] ?? []);
+        $lead_fields = $this->normalize_lead_fields($lead);
 
         $contact = [];
         $custom_values = [];
@@ -634,9 +634,10 @@ class FCRM_FB_Events_Lead_Ads
         ]);
     }
 
-    private function normalize_lead_fields(array $field_data)
+    private function normalize_lead_fields(array $lead)
     {
         $fields = [];
+        $field_data = $lead['field_data'] ?? [];
 
         foreach ($field_data as $field) {
             $name = isset($field['name']) ? sanitize_key($field['name']) : '';
@@ -652,7 +653,53 @@ class FCRM_FB_Events_Lead_Ads
             $fields[$name] = $value;
         }
 
+        $leadgen_id = $lead['id'] ?? '';
+        if ($leadgen_id) {
+            $fields['lead_id'] = $leadgen_id;
+            $fields['leadgen_id'] = $leadgen_id;
+        }
+
         return $fields;
+    }
+
+    private function should_skip_existing_lead($leadgen_id, array $context)
+    {
+        if (!FCRM_FB_Events_Lead_Store::has_lead($leadgen_id)) {
+            return false;
+        }
+
+        $source = $context['source'] ?? '';
+        if ($source !== 'manual' || !$this->is_test_mode()) {
+            return true;
+        }
+
+        $stored = FCRM_FB_Events_Lead_Store::get_lead($leadgen_id);
+        if (empty($stored) || empty($stored['contact_id'])) {
+            return false;
+        }
+
+        return $this->lead_contact_exists((int) $stored['contact_id']);
+    }
+
+    private function lead_contact_exists($contact_id)
+    {
+        if (!$contact_id) {
+            return false;
+        }
+
+        if (!class_exists('FluentCrm\\App\\Models\\Subscriber')) {
+            return true;
+        }
+
+        return (bool) FluentCrm\App\Models\Subscriber::query()->where('id', $contact_id)->first();
+    }
+
+    private function is_test_mode()
+    {
+        $settings = $this->get_lead_settings();
+        $test_mode = !empty($settings['test_mode']) && $settings['test_mode'] === 'yes';
+
+        return (bool) apply_filters('fcrm_fb_events_lead_ads_test_mode', $test_mode);
     }
 
     private function dedupe_by_phone()
