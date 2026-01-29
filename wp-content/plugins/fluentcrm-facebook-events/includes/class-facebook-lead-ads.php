@@ -311,6 +311,10 @@ class FCRM_FB_Events_Lead_Ads
             return $contact_data;
         }
 
+        if (!empty($leadgen_id)) {
+            $contact_data['custom_values']['leadgen_id'] = $leadgen_id;
+        }
+
         $contact = $this->upsert_contact($contact_data['contact'], $contact_data['custom_values']);
         if (is_wp_error($contact)) {
             $this->log_event('lead_ads', $contact_data['contact']['email'] ?? '', 500, $contact->get_error_message(), false);
