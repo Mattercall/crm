@@ -474,6 +474,12 @@ class FCRM_FB_Events_Lead_Ads
         $settings = $this->get_lead_settings();
         $mapping = $this->get_lead_field_mapping();
         $lead_fields = $this->normalize_lead_fields($lead['field_data'] ?? []);
+        $leadgen_id = $lead['id'] ?? '';
+
+        if ($leadgen_id) {
+            $lead_fields['leadgen_id'] = $leadgen_id;
+            $lead_fields['lead_id'] = $leadgen_id;
+        }
 
         $contact = [];
         $custom_values = [];
