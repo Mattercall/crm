@@ -202,7 +202,7 @@ class FCRM_FB_Events_Admin
                 'last_name' => 'last_name',
                 'phone_number' => 'phone',
                 'phone' => 'phone',
-                'lead_id' => '',
+                'lead_id' => 'lead_id',
             ],
             'mappings' => [
                 'tag_applied' => [
