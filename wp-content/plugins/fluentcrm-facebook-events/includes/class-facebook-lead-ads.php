@@ -70,12 +70,13 @@ class FCRM_FB_Events_Lead_Ads
                 }
 
                 $value = $change['value'] ?? [];
-                $leadgen_id = $value['leadgen_id'] ?? '';
+                $leadgen_id = $this->extract_leadgen_id_from_value($value);
                 $form_id = $value['form_id'] ?? '';
                 $created_time = !empty($value['created_time']) ? (int) $value['created_time'] : 0;
                 $event_page_id = $value['page_id'] ?? $page_id;
 
                 if (!$leadgen_id) {
+                    $this->log_missing_leadgen_id($value, $payload);
                     continue;
                 }
 
@@ -83,7 +84,7 @@ class FCRM_FB_Events_Lead_Ads
                     continue;
                 }
 
-                $this->queue_leadgen($leadgen_id, $form_id, $event_page_id, $created_time, 'webhook');
+                $this->queue_leadgen($leadgen_id, $form_id, $event_page_id, $created_time, 'webhook', $payload);
             }
         }
 
@@ -296,6 +297,10 @@ class FCRM_FB_Events_Lead_Ads
         $form_id = $lead['form_id'] ?? ($context['form_id'] ?? '');
         $page_id = $context['page_id'] ?? '';
         $lead_time = !empty($lead['created_time']) ? strtotime($lead['created_time']) : 0;
+        $webhook_payload = $context['webhook_payload'] ?? null;
+        if (is_array($webhook_payload)) {
+            $webhook_payload = wp_json_encode($webhook_payload);
+        }
 
         if (!$leadgen_id) {
             return new WP_Error('missing_lead', __('Lead ID missing.', 'fluentcrm-facebook-events'));
@@ -313,12 +318,17 @@ class FCRM_FB_Events_Lead_Ads
 
         if (!empty($leadgen_id)) {
             $contact_data['custom_values']['leadgen_id'] = $leadgen_id;
+            $contact_data['custom_values']['lead_id'] = $leadgen_id;
         }
 
         $contact = $this->upsert_contact($contact_data['contact'], $contact_data['custom_values']);
         if (is_wp_error($contact)) {
             $this->log_event('lead_ads', $contact_data['contact']['email'] ?? '', 500, $contact->get_error_message(), false);
             return $contact;
+        }
+
+        if ($webhook_payload && function_exists('fluentcrm_update_subscriber_meta')) {
+            fluentcrm_update_subscriber_meta($contact->id, 'fb_lead_webhook_payload', $webhook_payload);
         }
 
         $this->apply_tags_and_lists($contact);
@@ -331,6 +341,7 @@ class FCRM_FB_Events_Lead_Ads
             'contact_id' => $contact->id ?? null,
             'source' => $context['source'] ?? 'webhook',
             'lead_time' => $lead_time,
+            'webhook_payload' => $webhook_payload,
         ]);
 
         $identifier = $contact->email ?? ($contact->id ?? '');
@@ -339,7 +350,7 @@ class FCRM_FB_Events_Lead_Ads
         return $contact;
     }
 
-    public function process_leadgen($leadgen_id, $form_id, $page_id, $created_time, $source)
+    public function process_leadgen($leadgen_id, $form_id, $page_id, $created_time, $source, $webhook_payload = null)
     {
         if (FCRM_FB_Events_Lead_Store::has_lead($leadgen_id)) {
             return true;
@@ -365,12 +376,13 @@ class FCRM_FB_Events_Lead_Ads
             'page_id' => $page_id,
             'created_time' => $created_time,
             'source' => $source,
+            'webhook_payload' => $webhook_payload,
         ]);
 
         return $result;
     }
 
-    public function queue_leadgen($leadgen_id, $form_id, $page_id, $created_time, $source)
+    public function queue_leadgen($leadgen_id, $form_id, $page_id, $created_time, $source, $webhook_payload = null)
     {
         if (!$leadgen_id) {
             return;
@@ -394,6 +406,9 @@ class FCRM_FB_Events_Lead_Ads
             'source' => $source,
             'attempt' => 1,
         ];
+        if ($webhook_payload) {
+            $payload['webhook_payload'] = wp_json_encode($webhook_payload);
+        }
 
         if (function_exists('as_enqueue_async_action')) {
             if (function_exists('as_next_scheduled_action')) {
@@ -432,7 +447,8 @@ class FCRM_FB_Events_Lead_Ads
             $payload['form_id'] ?? '',
             $payload['page_id'] ?? '',
             $payload['created_time'] ?? 0,
-            $payload['source'] ?? 'webhook'
+            $payload['source'] ?? 'webhook',
+            $payload['webhook_payload'] ?? null
         );
 
         if (is_wp_error($result)) {
@@ -670,6 +686,113 @@ class FCRM_FB_Events_Lead_Ads
         }
 
         return $fields;
+    }
+
+    public function extract_leadgen_id_from_payload(array $payload)
+    {
+        $entry = $payload['entry'][0] ?? [];
+        $change = $entry['changes'][0] ?? [];
+        $value = $change['value'] ?? [];
+
+        return $this->extract_leadgen_id_from_value($value);
+    }
+
+    private function extract_leadgen_id_from_value(array $value)
+    {
+        return $value['leadgen_id'] ?? ($value['id'] ?? '');
+    }
+
+    private function log_missing_leadgen_id(array $value, array $payload)
+    {
+        $redacted_value = $this->redact_payload($value);
+        $redacted_payload = $this->redact_payload($payload);
+        $message = sprintf(
+            'Missing leadgen_id in webhook payload. Value: %s Payload: %s',
+            wp_json_encode($redacted_value),
+            wp_json_encode($redacted_payload)
+        );
+
+        FCRM_FB_Events_Logger::add_log([
+            'trigger' => 'lead_ads',
+            'contact_id' => 0,
+            'email' => '',
+            'event_name' => 'lead_webhook',
+            'status_code' => 422,
+            'response' => $message,
+            'success' => false,
+        ]);
+    }
+
+    private function redact_payload($payload)
+    {
+        if (!is_array($payload)) {
+            return $payload;
+        }
+
+        $sensitive_keys = [
+            'email',
+            'phone',
+            'first_name',
+            'last_name',
+            'full_name',
+            'name',
+            'address',
+            'street',
+            'city',
+            'state',
+            'zip',
+            'postal_code',
+            'country',
+            'dob',
+            'birthday',
+        ];
+
+        $redacted = [];
+        foreach ($payload as $key => $value) {
+            $key_string = is_string($key) ? $key : (string) $key;
+            $normalized_key = sanitize_key($key_string);
+
+            if (in_array($normalized_key, $sensitive_keys, true)) {
+                $redacted[$key] = '[redacted]';
+                continue;
+            }
+
+            if ($normalized_key === 'field_data' && is_array($value)) {
+                $redacted[$key] = $this->redact_field_data($value, $sensitive_keys);
+                continue;
+            }
+
+            if (is_array($value)) {
+                $redacted[$key] = $this->redact_payload($value);
+                continue;
+            }
+
+            $redacted[$key] = $value;
+        }
+
+        return $redacted;
+    }
+
+    private function redact_field_data(array $field_data, array $sensitive_keys)
+    {
+        $redacted = [];
+        foreach ($field_data as $field) {
+            if (!is_array($field)) {
+                $redacted[] = $field;
+                continue;
+            }
+
+            $name = isset($field['name']) ? sanitize_key($field['name']) : '';
+            if ($name && in_array($name, $sensitive_keys, true)) {
+                $field['values'] = ['[redacted]'];
+            } elseif (isset($field['values']) && is_array($field['values'])) {
+                $field['values'] = $this->redact_payload($field['values']);
+            }
+
+            $redacted[] = $field;
+        }
+
+        return $redacted;
     }
 
     private function should_skip_existing_lead($leadgen_id, array $context)
