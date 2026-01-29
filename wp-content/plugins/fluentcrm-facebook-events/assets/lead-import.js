@@ -52,9 +52,15 @@
                         );
                     }
                 })
-                .fail(function () {
-                    setProgress($progress, 100, FcrmFbLeadImport.errorText);
-                    updateStatus($status, 'notice-error', FcrmFbLeadImport.errorText);
+                .fail(function (xhr) {
+                    var message = FcrmFbLeadImport.errorText;
+                    if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                        message = xhr.responseJSON.data.message;
+                    } else if (xhr && xhr.responseText) {
+                        message = xhr.responseText;
+                    }
+                    setProgress($progress, 100, message);
+                    updateStatus($status, 'notice-error', message);
                 })
                 .always(function () {
                     setTimeout(function () {

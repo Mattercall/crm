@@ -79,6 +79,10 @@ class FCRM_FB_Events_Lead_Ads
                     continue;
                 }
 
+                if (!$this->is_form_selected($form_id)) {
+                    continue;
+                }
+
                 $this->queue_leadgen($leadgen_id, $form_id, $event_page_id, $created_time, 'webhook');
             }
         }
@@ -688,7 +692,11 @@ class FCRM_FB_Events_Lead_Ads
 
         if ($status >= 400) {
             $message = $decoded['error']['message'] ?? __('Facebook API error.', 'fluentcrm-facebook-events');
-            return new WP_Error('facebook_error', $message);
+            return new WP_Error('facebook_error', $message, [
+                'status' => $status,
+                'response' => $decoded,
+                'body' => $body,
+            ]);
         }
 
         return is_array($decoded) ? $decoded : [];
@@ -725,5 +733,21 @@ class FCRM_FB_Events_Lead_Ads
             'response' => $response,
             'success' => $success,
         ]);
+    }
+
+    private function is_form_selected($form_id)
+    {
+        $settings = $this->get_lead_settings();
+        $selected_forms = array_filter((array) ($settings['form_ids'] ?? []));
+
+        if (empty($selected_forms)) {
+            return true;
+        }
+
+        if (!$form_id) {
+            return false;
+        }
+
+        return in_array($form_id, $selected_forms, true);
     }
 }
