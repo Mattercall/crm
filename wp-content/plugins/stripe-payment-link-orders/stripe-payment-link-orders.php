@@ -27,6 +27,9 @@ class SPPLO_Stripe_Payment_Link_Orders {
   // - [ { "label":"Link 1","url":"..." }, { "label":"Link 2","url":"..." } ]
   const OPT_DOWNLOAD_MAP_JSON = 'spplo_download_map_json';
 
+  const OPT_FLUENTCRM_LIST_ID = 'spplo_fluentcrm_list_id';
+  const OPT_FLUENTCRM_TAG_ID  = 'spplo_fluentcrm_tag_id';
+
   const CPT = 'stripe_order';
 
   public static function init() {
@@ -83,6 +86,13 @@ class SPPLO_Stripe_Payment_Link_Orders {
     register_setting('spplo_settings_group', self::OPT_EMAIL_INTRO);
 
     register_setting('spplo_settings_group', self::OPT_DOWNLOAD_MAP_JSON);
+
+    register_setting('spplo_settings_group', self::OPT_FLUENTCRM_LIST_ID, [
+      'sanitize_callback' => 'absint',
+    ]);
+    register_setting('spplo_settings_group', self::OPT_FLUENTCRM_TAG_ID, [
+      'sanitize_callback' => 'absint',
+    ]);
   }
 
   public static function settings_page() {
@@ -206,6 +216,61 @@ class SPPLO_Stripe_Payment_Link_Orders {
               <p class="description">This will appear above the links list.</p>
             </td>
           </tr>
+        </table>
+
+        <hr>
+
+        <h2>FluentCRM</h2>
+        <table class="form-table" role="presentation">
+          <?php if (!class_exists('FluentCrm\\App\\Models\\Subscriber')) : ?>
+            <tr>
+              <th scope="row">FluentCRM Status</th>
+              <td>
+                <p class="description">FluentCRM is not active. Install/activate FluentCRM to map orders to a list or tag.</p>
+              </td>
+            </tr>
+          <?php else : ?>
+            <?php
+            $selected_list_id = (int)get_option(self::OPT_FLUENTCRM_LIST_ID, 0);
+            $selected_tag_id  = (int)get_option(self::OPT_FLUENTCRM_TAG_ID, 0);
+            $lists = class_exists('FluentCrm\\App\\Models\\Lists')
+              ? FluentCrm\App\Models\Lists::orderBy('title')->get()
+              : [];
+            $tags = class_exists('FluentCrm\\App\\Models\\Tag')
+              ? FluentCrm\App\Models\Tag::orderBy('title')->get()
+              : [];
+            ?>
+            <tr>
+              <th scope="row"><label for="<?php echo esc_attr(self::OPT_FLUENTCRM_LIST_ID); ?>">FluentCRM List</label></th>
+              <td>
+                <select id="<?php echo esc_attr(self::OPT_FLUENTCRM_LIST_ID); ?>"
+                        name="<?php echo esc_attr(self::OPT_FLUENTCRM_LIST_ID); ?>">
+                  <option value="0"<?php selected($selected_list_id, 0); ?>>None</option>
+                  <?php foreach ($lists as $list) : ?>
+                    <option value="<?php echo esc_attr($list->id); ?>"<?php selected($selected_list_id, (int)$list->id); ?>>
+                      <?php echo esc_html($list->title); ?>
+                    </option>
+                  <?php endforeach; ?>
+                </select>
+                <p class="description">New orders will add the contact to this list.</p>
+              </td>
+            </tr>
+            <tr>
+              <th scope="row"><label for="<?php echo esc_attr(self::OPT_FLUENTCRM_TAG_ID); ?>">FluentCRM Tag</label></th>
+              <td>
+                <select id="<?php echo esc_attr(self::OPT_FLUENTCRM_TAG_ID); ?>"
+                        name="<?php echo esc_attr(self::OPT_FLUENTCRM_TAG_ID); ?>">
+                  <option value="0"<?php selected($selected_tag_id, 0); ?>>None</option>
+                  <?php foreach ($tags as $tag) : ?>
+                    <option value="<?php echo esc_attr($tag->id); ?>"<?php selected($selected_tag_id, (int)$tag->id); ?>>
+                      <?php echo esc_html($tag->title); ?>
+                    </option>
+                  <?php endforeach; ?>
+                </select>
+                <p class="description">New orders will apply this tag to the contact.</p>
+              </td>
+            </tr>
+          <?php endif; ?>
         </table>
 
         <hr>
@@ -444,7 +509,12 @@ class SPPLO_Stripe_Payment_Link_Orders {
 
     update_post_meta($post_id, '_spplo_fluentcrm_contact_id', (int)$contact->id);
 
-    $tag_id = self::get_fluentcrm_tag_id_by_title('Purchase');
+    $list_id = (int)get_option(self::OPT_FLUENTCRM_LIST_ID, 0);
+    if ($list_id && method_exists($contact, 'attachLists')) {
+      $contact->attachLists([$list_id]);
+    }
+
+    $tag_id = (int)get_option(self::OPT_FLUENTCRM_TAG_ID, 0);
     if ($tag_id && method_exists($contact, 'attachTags')) {
       $contact->attachTags([$tag_id]);
     }
@@ -475,15 +545,6 @@ class SPPLO_Stripe_Payment_Link_Orders {
     }
 
     return FluentCrm\App\Models\Subscriber::create($contact_data);
-  }
-
-  private static function get_fluentcrm_tag_id_by_title($title) {
-    if (!class_exists('FluentCrm\\App\\Models\\Tag')) {
-      return 0;
-    }
-
-    $tag = FluentCrm\App\Models\Tag::where('title', $title)->first();
-    return $tag ? (int)$tag->id : 0;
   }
 
   private static function split_name($name) {
