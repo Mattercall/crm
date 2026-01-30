@@ -40,6 +40,8 @@ class SPPLO_Stripe_Payment_Link_Orders {
     add_action('manage_' . self::CPT . '_posts_custom_column', [__CLASS__, 'column_content'], 10, 2);
 
     add_action('add_meta_boxes', [__CLASS__, 'add_metaboxes']);
+
+    add_action('spplo_order_created', [__CLASS__, 'sync_fluentcrm_contact'], 10, 4);
   }
 
   public static function register_cpt() {
@@ -408,6 +410,96 @@ class SPPLO_Stripe_Payment_Link_Orders {
     do_action('spplo_order_created', $post_id, $session, $event, $items);
 
     return true;
+  }
+
+  public static function sync_fluentcrm_contact($post_id, array $session, array $event, array $items) {
+    if (!class_exists('FluentCrm\\App\\Models\\Subscriber')) {
+      return;
+    }
+
+    $customer_details = $session['customer_details'] ?? [];
+    $email = sanitize_email((string)($customer_details['email'] ?? ''));
+    if (!$email || !is_email($email)) {
+      return;
+    }
+
+    $name = sanitize_text_field((string)($customer_details['name'] ?? ''));
+    $phone = sanitize_text_field((string)($customer_details['phone'] ?? ''));
+    $name_parts = self::split_name($name);
+
+    $contact_data = [
+      'email' => $email,
+      'first_name' => $name_parts['first_name'],
+      'last_name' => $name_parts['last_name'],
+      'full_name' => $name,
+      'phone' => $phone,
+      'source' => 'stripe_payment_link_orders',
+    ];
+
+    $contact = self::upsert_fluentcrm_contact($contact_data);
+
+    if (!$contact || is_wp_error($contact)) {
+      return;
+    }
+
+    update_post_meta($post_id, '_spplo_fluentcrm_contact_id', (int)$contact->id);
+
+    $tag_id = self::get_fluentcrm_tag_id_by_title('Purchase');
+    if ($tag_id && method_exists($contact, 'attachTags')) {
+      $contact->attachTags([$tag_id]);
+    }
+  }
+
+  private static function upsert_fluentcrm_contact(array $contact_data) {
+    $contact = null;
+
+    if (class_exists('FluentCrm\\App\\Services\\Contacts\\ContactService')) {
+      $service = new FluentCrm\App\Services\Contacts\ContactService();
+      if (method_exists($service, 'createOrUpdate')) {
+        $contact = $service->createOrUpdate($contact_data);
+      }
+    }
+
+    if ($contact) {
+      return $contact;
+    }
+
+    $query = FluentCrm\App\Models\Subscriber::query();
+    $query->where('email', $contact_data['email']);
+
+    $existing = $query->first();
+    if ($existing) {
+      $existing->fill($contact_data);
+      $existing->save();
+      return $existing;
+    }
+
+    return FluentCrm\App\Models\Subscriber::create($contact_data);
+  }
+
+  private static function get_fluentcrm_tag_id_by_title($title) {
+    if (!class_exists('FluentCrm\\App\\Models\\Tag')) {
+      return 0;
+    }
+
+    $tag = FluentCrm\App\Models\Tag::where('title', $title)->first();
+    return $tag ? (int)$tag->id : 0;
+  }
+
+  private static function split_name($name) {
+    $name = trim((string)$name);
+    if ($name === '') {
+      return ['first_name' => '', 'last_name' => ''];
+    }
+
+    $parts = preg_split('/\s+/', $name, 2);
+    $first = $parts[0] ?? '';
+    $last = $parts[1] ?? '';
+
+    return [
+      'first_name' => $first,
+      'last_name' => $last,
+    ];
   }
 
   /**
