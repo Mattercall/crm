@@ -406,9 +406,10 @@ class SPPLO_Stripe_Payment_Link_Orders {
     ]);
     if (!empty($existing)) return false;
 
-    $customer_details    = $session['customer_details'] ?? [];
-    $name                = $customer_details['name']  ?? '';
+    $customer_details    = self::get_customer_details($session);
+    $name                = $customer_details['name'] ?? '';
     $email               = $customer_details['email'] ?? '';
+    $phone               = $customer_details['phone'] ?? '';
     $amount_total        = $session['amount_total'] ?? null; // cents
     $currency            = strtoupper($session['currency'] ?? '');
     $mode                = $session['mode'] ?? '';
@@ -451,6 +452,10 @@ class SPPLO_Stripe_Payment_Link_Orders {
 
     update_post_meta($post_id, '_spplo_customer_name', sanitize_text_field((string)$name));
     update_post_meta($post_id, '_spplo_customer_email', sanitize_email((string)$email));
+    update_post_meta($post_id, '_spplo_customer_phone', sanitize_text_field((string)$phone));
+    update_post_meta($post_id, '_spplo_customer_details_source', sanitize_text_field((string)($customer_details['source'] ?? '')));
+    update_post_meta($post_id, '_spplo_customer_fetch_http_code', (int)($customer_details['fetch_http_code'] ?? 0));
+    update_post_meta($post_id, '_spplo_customer_fetch_error', sanitize_text_field((string)($customer_details['fetch_error'] ?? '')));
 
     update_post_meta($post_id, '_spplo_amount_total', is_null($amount_total) ? '' : (int)$amount_total);
     update_post_meta($post_id, '_spplo_currency', sanitize_text_field((string)$currency));
@@ -489,7 +494,7 @@ class SPPLO_Stripe_Payment_Link_Orders {
       return;
     }
 
-    $customer_details = $session['customer_details'] ?? [];
+    $customer_details = self::get_customer_details($session);
     $email = sanitize_email((string)($customer_details['email'] ?? ''));
     if (!$email || !is_email($email)) {
       return;
@@ -525,6 +530,97 @@ class SPPLO_Stripe_Payment_Link_Orders {
     if ($tag_id && method_exists($contact, 'attachTags')) {
       $contact->attachTags([$tag_id]);
     }
+  }
+
+  private static function get_customer_details(array $session) {
+    $details = is_array($session['customer_details'] ?? null) ? $session['customer_details'] : [];
+
+    $name = sanitize_text_field((string)($details['name'] ?? ''));
+    $email = sanitize_email((string)($details['email'] ?? ''));
+    $phone = sanitize_text_field((string)($details['phone'] ?? ''));
+
+    $sources = [];
+    if ($name || $email || $phone) {
+      $sources[] = 'session.customer_details';
+    }
+
+    $session_email = sanitize_email((string)($session['customer_email'] ?? ''));
+    if (!$email && $session_email) {
+      $email = $session_email;
+      $sources[] = 'session.customer_email';
+    }
+
+    $fetch_http_code = 0;
+    $fetch_error = '';
+
+    $needs_fetch = (!$email || !$name || !$phone) && !empty($session['customer']);
+    if ($needs_fetch) {
+      $customer_id = (string)$session['customer'];
+      $fetched = self::fetch_stripe_customer($customer_id);
+      $fetch_http_code = (int)($fetched['http_code'] ?? 0);
+      $fetch_error = (string)($fetched['error'] ?? '');
+      $customer = $fetched['customer'] ?? [];
+      if (is_array($customer)) {
+        if (!$email && !empty($customer['email'])) {
+          $email = sanitize_email((string)$customer['email']);
+        }
+        if (!$name && !empty($customer['name'])) {
+          $name = sanitize_text_field((string)$customer['name']);
+        }
+        if (!$phone && !empty($customer['phone'])) {
+          $phone = sanitize_text_field((string)$customer['phone']);
+        }
+      }
+      $sources[] = 'stripe.customer';
+    }
+
+    return [
+      'name' => $name,
+      'email' => $email,
+      'phone' => $phone,
+      'source' => implode(',', array_unique($sources)),
+      'fetch_http_code' => $fetch_http_code,
+      'fetch_error' => $fetch_error,
+    ];
+  }
+
+  private static function fetch_stripe_customer($customer_id) {
+    $secret_key = (string)get_option(self::OPT_SECRET_KEY, '');
+    if (empty($secret_key)) {
+      return ['customer' => [], 'http_code' => 0, 'error' => 'Stripe secret key is missing in settings.'];
+    }
+
+    $url = 'https://api.stripe.com/v1/customers/' . rawurlencode($customer_id);
+
+    $resp = wp_remote_get($url, [
+      'headers' => [
+        'Authorization' => 'Bearer ' . $secret_key,
+      ],
+      'timeout' => 20,
+    ]);
+
+    if (is_wp_error($resp)) {
+      return ['customer' => [], 'http_code' => 0, 'error' => $resp->get_error_message()];
+    }
+
+    $code = (int)wp_remote_retrieve_response_code($resp);
+    $body = (string)wp_remote_retrieve_body($resp);
+    $json = json_decode($body, true);
+
+    if ($code < 200 || $code >= 300) {
+      $msg = '';
+      if (is_array($json) && isset($json['error']['message'])) {
+        $msg = (string)$json['error']['message'];
+      }
+      if ($msg === '') $msg = 'Stripe API error while fetching customer.';
+      return ['customer' => [], 'http_code' => $code, 'error' => $msg];
+    }
+
+    if (!is_array($json)) {
+      return ['customer' => [], 'http_code' => $code, 'error' => 'Invalid Stripe customer response.'];
+    }
+
+    return ['customer' => $json, 'http_code' => $code, 'error' => ''];
   }
 
   private static function upsert_fluentcrm_contact(array $contact_data) {
