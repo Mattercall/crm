@@ -18,6 +18,7 @@ class SPPLO_Stripe_Payment_Link_Orders {
   const OPT_EMAIL_FROM_EMAIL  = 'spplo_email_from_email';
   const OPT_EMAIL_SUBJECT     = 'spplo_email_subject';
   const OPT_EMAIL_INTRO       = 'spplo_email_intro';
+  const OPT_EMAIL_TEMPLATE_MAP_JSON = 'spplo_email_template_map_json';
 
   // Mapping item -> link(s)
   // JSON object: keys can be Stripe product_id (prod_...), price_id (price_...), or fallback item name.
@@ -45,6 +46,10 @@ class SPPLO_Stripe_Payment_Link_Orders {
     add_action('add_meta_boxes', [__CLASS__, 'add_metaboxes']);
 
     add_action('spplo_order_created', [__CLASS__, 'sync_fluentcrm_contact'], 10, 4);
+
+    add_action('admin_post_spplo_send_mapped_email', [__CLASS__, 'handle_admin_send_mapped_email']);
+    add_action('admin_post_spplo_send_custom_email', [__CLASS__, 'handle_admin_send_custom_email']);
+    add_action('admin_notices', [__CLASS__, 'admin_notices']);
   }
 
   public static function register_cpt() {
@@ -84,6 +89,7 @@ class SPPLO_Stripe_Payment_Link_Orders {
     register_setting('spplo_settings_group', self::OPT_EMAIL_FROM_EMAIL);
     register_setting('spplo_settings_group', self::OPT_EMAIL_SUBJECT);
     register_setting('spplo_settings_group', self::OPT_EMAIL_INTRO);
+    register_setting('spplo_settings_group', self::OPT_EMAIL_TEMPLATE_MAP_JSON);
 
     register_setting('spplo_settings_group', self::OPT_DOWNLOAD_MAP_JSON);
 
@@ -102,6 +108,21 @@ class SPPLO_Stripe_Payment_Link_Orders {
 
     $default_subject = 'Your links for Order #{order_id}';
     $default_intro = "Thanks for your purchase!\nHere are your links:";
+    $default_template_map = wp_json_encode([
+      "prod_ABC123" => [
+        "subject" => "Your downloads for Order #{order_id}",
+        "body" => "Hi {customer_name},\n\nThanks for purchasing {item_name}! Your download link is below:\n{download_url}\n\nNeed help? Reply to this email.",
+        "links" => [
+          ["label" => "Download", "url" => "https://example.com/downloads/logo-pack"],
+          ["label" => "Documentation", "url" => "https://example.com/docs/logo-pack"]
+        ]
+      ],
+      "price_123" => [
+        "subject" => "Access details for {item_name}",
+        "body" => "Thanks for your order #{order_id}.\n\nAccess your purchase here:\n{download_url}",
+        "links" => ["label" => "Member Area", "url" => "https://example.com/members/pro"]
+      ]
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
     $default_map = wp_json_encode([
       // Example mappings — replace these with your Stripe product/price IDs and your links
       "prod_ABC123" => [
@@ -214,6 +235,30 @@ class SPPLO_Stripe_Payment_Link_Orders {
                 name="<?php echo esc_attr(self::OPT_EMAIL_INTRO); ?>"
               ><?php echo esc_textarea(get_option(self::OPT_EMAIL_INTRO, $default_intro)); ?></textarea>
               <p class="description">This will appear above the links list.</p>
+            </td>
+          </tr>
+        </table>
+
+        <hr>
+
+        <h2>Email Template Mapping (Per Product/Price)</h2>
+        <p>Paste JSON mapping here. Keys can be Stripe <code>product_id</code> (<code>prod_...</code>) or <code>price_id</code> (<code>price_...</code>).</p>
+        <table class="form-table" role="presentation">
+          <tr>
+            <th scope="row"><label for="<?php echo esc_attr(self::OPT_EMAIL_TEMPLATE_MAP_JSON); ?>">Template Mapping JSON</label></th>
+            <td>
+              <?php $template_map_val = get_option(self::OPT_EMAIL_TEMPLATE_MAP_JSON, $default_template_map); ?>
+              <textarea class="large-text code" rows="14"
+                id="<?php echo esc_attr(self::OPT_EMAIL_TEMPLATE_MAP_JSON); ?>"
+                name="<?php echo esc_attr(self::OPT_EMAIL_TEMPLATE_MAP_JSON); ?>"
+              ><?php echo esc_textarea($template_map_val); ?></textarea>
+              <p class="description">
+                Value formats supported:
+                <br>• <code>"prod_XXX": {"subject":"...","body":"...","links":"https://your-link"}</code>
+                <br>• <code>"prod_XXX": {"subject":"...","body":"...","links":{"label":"Download","url":"https://your-link"}}</code>
+                <br>• <code>"prod_XXX": {"subject":"...","body":"...","links":[{"label":"Link 1","url":"..."},{"label":"Link 2","url":"..."}]}</code>
+                <br>Placeholders: <code>{order_id}</code>, <code>{customer_name}</code>, <code>{item_name}</code>, <code>{download_url}</code>, <code>{links_html}</code>, <code>{links_text}</code>
+              </p>
             </td>
           </tr>
         </table>
@@ -737,49 +782,99 @@ class SPPLO_Stripe_Payment_Link_Orders {
     foreach ($decoded as $key => $val) {
       $k = (string)$key;
 
-      $links = [];
-
-      // string URL
-      if (is_string($val)) {
-        $u = trim($val);
-        if ($u !== '') {
-          $links[] = ['label' => 'Link', 'url' => $u];
-        }
-      }
-      // object {label,url}
-      elseif (is_array($val) && isset($val['url'])) {
-        $u = trim((string)$val['url']);
-        if ($u !== '') {
-          $links[] = [
-            'label' => trim((string)($val['label'] ?? 'Link')) ?: 'Link',
-            'url'   => $u
-          ];
-        }
-      }
-      // array of objects
-      elseif (is_array($val) && array_keys($val) === range(0, count($val) - 1)) {
-        foreach ($val as $row) {
-          if (!is_array($row)) continue;
-          $u = trim((string)($row['url'] ?? ''));
-          if ($u === '') continue;
-          $links[] = [
-            'label' => trim((string)($row['label'] ?? 'Link')) ?: 'Link',
-            'url'   => $u
-          ];
-        }
-      }
-
+      $links = self::normalize_links_value($val);
       if (!empty($links)) {
-        // de-duplicate by URL
-        $uniq = [];
-        foreach ($links as $lnk) {
-          $uniq[$lnk['url']] = $lnk;
-        }
-        $map[$k] = array_values($uniq);
+        $map[$k] = $links;
       }
     }
 
     return ['map' => $map, 'error' => ''];
+  }
+
+  /**
+   * Parse template mapping JSON into normalized array.
+   * Normalized:
+   * [
+   *   "prod_XXX" => [
+   *     "subject" => "...",
+   *     "body" => "...",
+   *     "links" => [ ["label"=>"...", "url"=>"..."], ... ],
+   *   ],
+   * ]
+   */
+  private static function get_email_template_map_normalized() {
+    $raw = (string)get_option(self::OPT_EMAIL_TEMPLATE_MAP_JSON, '');
+    $raw = trim($raw);
+
+    if ($raw === '') return ['map' => [], 'error' => 'Email template map JSON is empty.'];
+
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) {
+      return ['map' => [], 'error' => 'Email template map JSON is invalid.'];
+    }
+
+    $map = [];
+
+    foreach ($decoded as $key => $val) {
+      if (!is_array($val)) {
+        continue;
+      }
+
+      $subject = trim((string)($val['subject'] ?? ''));
+      $body = trim((string)($val['body'] ?? ''));
+      $links = self::normalize_links_value($val['links'] ?? []);
+
+      if ($subject === '' && $body === '' && empty($links)) {
+        continue;
+      }
+
+      $map[(string)$key] = [
+        'subject' => $subject,
+        'body' => $body,
+        'links' => $links,
+      ];
+    }
+
+    return ['map' => $map, 'error' => ''];
+  }
+
+  private static function normalize_links_value($val) {
+    $links = [];
+
+    if (is_string($val)) {
+      $u = trim($val);
+      if ($u !== '') {
+        $links[] = ['label' => 'Link', 'url' => $u];
+      }
+    } elseif (is_array($val) && isset($val['url'])) {
+      $u = trim((string)$val['url']);
+      if ($u !== '') {
+        $links[] = [
+          'label' => trim((string)($val['label'] ?? 'Link')) ?: 'Link',
+          'url'   => $u
+        ];
+      }
+    } elseif (is_array($val) && array_keys($val) === range(0, count($val) - 1)) {
+      foreach ($val as $row) {
+        if (!is_array($row)) continue;
+        $u = trim((string)($row['url'] ?? ''));
+        if ($u === '') continue;
+        $links[] = [
+          'label' => trim((string)($row['label'] ?? 'Link')) ?: 'Link',
+          'url'   => $u
+        ];
+      }
+    }
+
+    if (!empty($links)) {
+      $uniq = [];
+      foreach ($links as $lnk) {
+        $uniq[$lnk['url']] = $lnk;
+      }
+      return array_values($uniq);
+    }
+
+    return [];
   }
 
   /**
@@ -847,40 +942,302 @@ class SPPLO_Stripe_Payment_Link_Orders {
     $already = get_post_meta($post_id, '_spplo_email_sent_at', true);
     if (!empty($already)) return;
 
+    $email_context = self::build_mapped_email_context($post_id, $resolved_links, []);
+    if (is_wp_error($email_context)) {
+      self::log_error($email_context->get_error_message(), ['post_id' => $post_id]);
+      update_post_meta($post_id, '_spplo_email_error', sanitize_text_field($email_context->get_error_message()));
+      return;
+    }
+
+    $result = self::send_customer_email($post_id, $email_context, 'automatic');
+    if (!$result['success']) {
+      update_post_meta($post_id, '_spplo_email_error', sanitize_text_field($result['message']));
+    }
+  }
+
+  private static function build_mapped_email_context($post_id, array $resolved_links, array $override) {
     $to = get_post_meta($post_id, '_spplo_customer_email', true);
     $customer_name = get_post_meta($post_id, '_spplo_customer_name', true);
 
     if (!is_email($to)) {
-      update_post_meta($post_id, '_spplo_email_error', 'Customer email is invalid or missing.');
-      return;
+      return new WP_Error('spplo_invalid_email', 'Customer email is invalid or missing.');
     }
 
-    // If there are zero links for all items, we still send (optional). Change to "return" if you prefer.
-    $has_any_link = false;
-    foreach ($resolved_links as $row) {
-      if (!empty($row['links'])) { $has_any_link = true; break; }
+    $template_map = self::get_email_template_map_normalized();
+    $map = $template_map['map'];
+    if (empty($map) && $template_map['error']) {
+      self::log_error($template_map['error'], ['post_id' => $post_id]);
     }
+
+    $selected = [
+      'key' => '',
+      'item_name' => '',
+      'links' => [],
+      'subject' => '',
+      'body' => '',
+    ];
+
+    foreach ($resolved_links as $row) {
+      $product_id = (string)($row['product_id'] ?? '');
+      $price_id = (string)($row['price_id'] ?? '');
+      $item_name = (string)($row['item_name'] ?? '');
+
+      if ($product_id && isset($map[$product_id])) {
+        $selected['key'] = $product_id;
+        $selected['item_name'] = $item_name;
+        $selected['subject'] = $map[$product_id]['subject'];
+        $selected['body'] = $map[$product_id]['body'];
+        $selected['links'] = !empty($map[$product_id]['links']) ? $map[$product_id]['links'] : ($row['links'] ?? []);
+        break;
+      }
+
+      if ($price_id && isset($map[$price_id])) {
+        $selected['key'] = $price_id;
+        $selected['item_name'] = $item_name;
+        $selected['subject'] = $map[$price_id]['subject'];
+        $selected['body'] = $map[$price_id]['body'];
+        $selected['links'] = !empty($map[$price_id]['links']) ? $map[$price_id]['links'] : ($row['links'] ?? []);
+        break;
+      }
+
+      if ($item_name && isset($map[$item_name])) {
+        $selected['key'] = $item_name;
+        $selected['item_name'] = $item_name;
+        $selected['subject'] = $map[$item_name]['subject'];
+        $selected['body'] = $map[$item_name]['body'];
+        $selected['links'] = !empty($map[$item_name]['links']) ? $map[$item_name]['links'] : ($row['links'] ?? []);
+        break;
+      }
+    }
+
+    $subject_tpl = $selected['subject'];
+    $body_tpl = $selected['body'];
+    $item_name = $selected['item_name'];
+    $template_key = $selected['key'];
+    $template_type = $template_key ? 'mapped' : 'default';
+
+    $links = $selected['links'];
+    if (empty($links)) {
+      $links = [];
+      foreach ($resolved_links as $row) {
+        if (!empty($row['links'])) {
+          $links = array_merge($links, $row['links']);
+        }
+      }
+    }
+
+    $links = apply_filters('spplo_download_links', $links, [
+      'post_id' => $post_id,
+      'template_key' => $template_key,
+      'template_type' => $template_type,
+    ]);
+
+    $download_url = '';
+    if (!empty($links[0]['url'])) {
+      $download_url = (string)$links[0]['url'];
+    }
+    $download_url = apply_filters('spplo_download_url', $download_url, [
+      'post_id' => $post_id,
+      'template_key' => $template_key,
+      'template_type' => $template_type,
+      'links' => $links,
+    ]);
+
+    $subject_tpl = $subject_tpl !== '' ? $subject_tpl : (string)get_option(self::OPT_EMAIL_SUBJECT, 'Your links for Order #{order_id}');
+    $body_tpl = $body_tpl !== '' ? $body_tpl : '';
+
+    $replacements = [
+      '{order_id}' => (string)$post_id,
+      '{customer_name}' => (string)$customer_name,
+      '{item_name}' => (string)$item_name,
+      '{download_url}' => (string)$download_url,
+    ];
+
+    $subject = strtr($subject_tpl, $replacements);
+
+    $intro = (string)get_option(self::OPT_EMAIL_INTRO, "Thanks for your purchase!\nHere are your links:");
+
+    $has_any_link = !empty($links);
+
+    $links_html = self::build_links_html($links);
+    $links_text = self::build_links_text($links);
+
+    $body_has_links_placeholders = (strpos($body_tpl, '{links_html}') !== false) || (strpos($body_tpl, '{links_text}') !== false);
+
+    $body_html = '';
+    $body_text = '';
+
+    if ($body_tpl !== '') {
+      $body_tpl = strtr($body_tpl, $replacements);
+      $body_html = wp_kses_post(str_replace(
+        ['{links_html}', '{links_text}'],
+        [$links_html, nl2br(esc_html($links_text))],
+        $body_tpl
+      ));
+      if ($body_has_links_placeholders) {
+        $body_text = str_replace('{links_text}', $links_text, wp_strip_all_tags($body_tpl));
+      } else {
+        $body_text = wp_strip_all_tags($body_tpl);
+        if ($links_text !== '') {
+          $body_text .= "\n\n" . $links_text;
+        }
+      }
+    } else {
+      $intro_html = nl2br(esc_html($intro));
+      $body_html  = '';
+      $body_html .= '<div style="font-family:Arial, sans-serif; font-size:14px; line-height:1.5;">';
+      $body_html .= '<p>Hi ' . esc_html($customer_name ? $customer_name : 'there') . ',</p>';
+      $body_html .= '<p>' . $intro_html . '</p>';
+
+      $body_html .= self::build_links_table_html($resolved_links);
+      $body_html .= '<p style="margin-top:16px;">Order ID: <strong>' . esc_html((string)$post_id) . '</strong></p>';
+
+      if (!$has_any_link) {
+        $body_html .= '<p><em>Note:</em> We could not find links for your items. Please contact support.</p>';
+      }
+
+      $body_html .= '<p>If you have any questions, reply to this email.</p>';
+      $body_html .= '</div>';
+
+      $body_text = "Hi " . ($customer_name ? $customer_name : 'there') . ",\n\n" . $intro . "\n\n";
+      foreach ($resolved_links as $row) {
+        $item = (string)($row['item_name'] ?? 'Item');
+        $qty = (int)($row['quantity'] ?? 1);
+        $body_text .= $item . ($qty > 1 ? ' (x' . $qty . ')' : '') . "\n";
+        $body_text .= self::build_links_text((array)($row['links'] ?? [])) . "\n\n";
+      }
+      $body_text .= "Order ID: " . $post_id . "\n";
+      if (!$has_any_link) {
+        $body_text .= "\nNote: We could not find links for your items. Please contact support.\n";
+      }
+      $body_text .= "\nIf you have any questions, reply to this email.\n";
+    }
+
+    if (!$body_has_links_placeholders && $body_tpl !== '' && $links_html !== '') {
+      $body_html .= '<br><br>' . $links_html;
+    }
+
+    $context = [
+      'post_id' => $post_id,
+      'to' => $to,
+      'customer_name' => $customer_name,
+      'template_key' => $template_key,
+      'template_type' => $template_type,
+      'item_name' => $item_name,
+      'links' => $links,
+      'resolved_links' => $resolved_links,
+      'download_url' => $download_url,
+    ];
+
+    $subject = apply_filters('spplo_email_subject', $subject, $context);
+    $body_html = apply_filters('spplo_email_html', $body_html, $context);
+    $body_text = apply_filters('spplo_email_text', $body_text, $context);
+
+    $context['subject'] = $subject;
+    $context['html'] = $body_html;
+    $context['text'] = $body_text;
+
+    if (!empty($override)) {
+      $context = array_merge($context, $override);
+    }
+
+    return $context;
+  }
+
+  private static function send_customer_email($post_id, array $context, $source = 'manual') {
+    $to = $context['to'];
+    $subject = $context['subject'];
+    $html = $context['html'];
+    $text = $context['text'];
 
     $from_name  = (string)get_option(self::OPT_EMAIL_FROM_NAME, get_bloginfo('name'));
     $from_email = (string)get_option(self::OPT_EMAIL_FROM_EMAIL, get_option('admin_email'));
     if (!is_email($from_email)) $from_email = get_option('admin_email');
 
-    $subject_tpl = (string)get_option(self::OPT_EMAIL_SUBJECT, 'Your links for Order #{order_id}');
-    $subject = str_replace(
-      ['{order_id}', '{customer_name}'],
-      [(string)$post_id, (string)$customer_name],
-      $subject_tpl
-    );
+    $headers = [];
+    $boundary = 'spplo-' . wp_generate_password(24, false);
+    $headers[] = 'Content-Type: multipart/alternative; boundary="' . $boundary . '"';
+    $headers[] = 'From: ' . self::sanitize_email_header_name($from_name) . ' <' . $from_email . '>';
 
-    $intro = (string)get_option(self::OPT_EMAIL_INTRO, "Thanks for your purchase!\nHere are your links:");
-    $intro_html = nl2br(esc_html($intro));
+    $body = '';
+    $body .= "--{$boundary}\r\n";
+    $body .= "Content-Type: text/plain; charset=UTF-8\r\n\r\n";
+    $body .= $text . "\r\n";
+    $body .= "--{$boundary}\r\n";
+    $body .= "Content-Type: text/html; charset=UTF-8\r\n\r\n";
+    $body .= $html . "\r\n";
+    $body .= "--{$boundary}--";
 
-    // Build HTML body
-    $html  = '';
-    $html .= '<div style="font-family:Arial, sans-serif; font-size:14px; line-height:1.5;">';
-    $html .= '<p>Hi ' . esc_html($customer_name ? $customer_name : 'there') . ',</p>';
-    $html .= '<p>' . $intro_html . '</p>';
+    do_action('spplo_before_email_send', $post_id, $context, $source);
+    $ok = wp_mail($to, $subject, $body, $headers);
 
+    $history_entry = [
+      'timestamp' => gmdate('c'),
+      'user_id' => get_current_user_id(),
+      'subject' => sanitize_text_field($subject),
+      'template_key' => sanitize_text_field((string)($context['template_key'] ?? '')),
+      'template_type' => sanitize_text_field((string)($context['template_type'] ?? '')),
+      'source' => sanitize_text_field($source),
+      'success' => $ok ? 1 : 0,
+      'message' => $ok ? 'sent' : 'wp_mail() failed',
+    ];
+
+    self::add_email_history($post_id, $history_entry);
+
+    if ($ok) {
+      update_post_meta($post_id, '_spplo_email_sent_at', gmdate('c'));
+      update_post_meta($post_id, '_spplo_email_to', sanitize_email($to));
+      update_post_meta($post_id, '_spplo_email_subject', sanitize_text_field($subject));
+      update_post_meta($post_id, '_spplo_email_template_key', sanitize_text_field((string)($context['template_key'] ?? '')));
+      update_post_meta($post_id, '_spplo_email_template_type', sanitize_text_field((string)($context['template_type'] ?? '')));
+      do_action('spplo_email_sent', $post_id, $context, $source);
+      return ['success' => true, 'message' => 'Email sent.'];
+    }
+
+    $message = 'wp_mail() failed. Check server mail configuration / SMTP.';
+    self::log_error($message, ['post_id' => $post_id, 'source' => $source]);
+    do_action('spplo_email_failed', $post_id, $context, $source, $message);
+    return ['success' => false, 'message' => $message];
+  }
+
+  private static function build_links_html(array $links) {
+    if (empty($links)) {
+      return '';
+    }
+
+    $parts = [];
+    foreach ($links as $lnk) {
+      $label = trim((string)($lnk['label'] ?? 'Link')) ?: 'Link';
+      $url = trim((string)($lnk['url'] ?? ''));
+      if ($url === '') {
+        continue;
+      }
+      $parts[] = '<a href="' . esc_url($url) . '" target="_blank" rel="noopener noreferrer">' . esc_html($label) . '</a>';
+    }
+
+    return implode('<br>', $parts);
+  }
+
+  private static function build_links_text(array $links) {
+    if (empty($links)) {
+      return '';
+    }
+
+    $parts = [];
+    foreach ($links as $lnk) {
+      $label = trim((string)($lnk['label'] ?? 'Link')) ?: 'Link';
+      $url = trim((string)($lnk['url'] ?? ''));
+      if ($url === '') {
+        continue;
+      }
+      $parts[] = $label . ': ' . $url;
+    }
+
+    return implode("\n", $parts);
+  }
+
+  private static function build_links_table_html(array $resolved_links) {
+    $html = '';
     $html .= '<table cellpadding="8" cellspacing="0" border="1" style="border-collapse:collapse; width:100%; max-width:700px;">';
     $html .= '<thead><tr>';
     $html .= '<th align="left">Item</th>';
@@ -888,23 +1245,12 @@ class SPPLO_Stripe_Payment_Link_Orders {
     $html .= '</tr></thead><tbody>';
 
     foreach ($resolved_links as $row) {
-      $item = $row['item_name'];
+      $item = (string)($row['item_name'] ?? 'Item');
       $qty  = (int)($row['quantity'] ?? 1);
       $item_display = esc_html($item . ($qty > 1 ? ' (x' . $qty . ')' : ''));
 
-      $links_html = '';
-      if (!empty($row['links'])) {
-        $parts = [];
-        foreach ($row['links'] as $lnk) {
-          $label = trim((string)($lnk['label'] ?? 'Link')) ?: 'Link';
-          $url   = trim((string)($lnk['url'] ?? ''));
-          if ($url === '') continue;
-          $parts[] = '<a href="' . esc_url($url) . '" target="_blank" rel="noopener noreferrer">' . esc_html($label) . '</a>';
-        }
-        $links_html = !empty($parts) ? implode('<br>', $parts) : '—';
-      } else {
-        $links_html = '—';
-      }
+      $links_html = self::build_links_html((array)($row['links'] ?? []));
+      $links_html = $links_html !== '' ? $links_html : '—';
 
       $html .= '<tr>';
       $html .= '<td>' . $item_display . '</td>';
@@ -913,30 +1259,21 @@ class SPPLO_Stripe_Payment_Link_Orders {
     }
 
     $html .= '</tbody></table>';
+    return $html;
+  }
 
-    $html .= '<p style="margin-top:16px;">Order ID: <strong>' . esc_html((string)$post_id) . '</strong></p>';
-
-    if (!$has_any_link) {
-      $html .= '<p><em>Note:</em> We could not find links for your items. Please contact support.</p>';
+  private static function add_email_history($post_id, array $entry) {
+    $history = get_post_meta($post_id, '_spplo_email_history', true);
+    if (!is_array($history)) {
+      $history = [];
     }
+    $history[] = $entry;
+    update_post_meta($post_id, '_spplo_email_history', $history);
+  }
 
-    $html .= '<p>If you have any questions, reply to this email.</p>';
-    $html .= '</div>';
-
-    // headers
-    $headers = [];
-    $headers[] = 'Content-Type: text/html; charset=UTF-8';
-    $headers[] = 'From: ' . self::sanitize_email_header_name($from_name) . ' <' . $from_email . '>';
-
-    $ok = wp_mail($to, $subject, $html, $headers);
-
-    if ($ok) {
-      update_post_meta($post_id, '_spplo_email_sent_at', gmdate('c'));
-      update_post_meta($post_id, '_spplo_email_to', sanitize_email($to));
-      update_post_meta($post_id, '_spplo_email_subject', sanitize_text_field($subject));
-    } else {
-      update_post_meta($post_id, '_spplo_email_error', 'wp_mail() failed. Check server mail configuration / SMTP.');
-    }
+  private static function log_error($message, array $context = []) {
+    $context_json = $context ? wp_json_encode($context) : '';
+    error_log('[SPPLO] ' . $message . ($context_json ? ' | ' . $context_json : ''));
   }
 
   private static function sanitize_email_header_name($name) {
@@ -997,6 +1334,15 @@ class SPPLO_Stripe_Payment_Link_Orders {
       self::CPT,
       'normal',
       'high'
+    );
+
+    add_meta_box(
+      'spplo_send_email',
+      'Send Email',
+      [__CLASS__, 'metabox_send_email'],
+      self::CPT,
+      'side',
+      'default'
     );
   }
 
@@ -1163,6 +1509,229 @@ class SPPLO_Stripe_Payment_Link_Orders {
     echo '<p><strong>Custom Fields JSON</strong></p><pre style="white-space:pre-wrap;">' . esc_html((string)get_post_meta($post->ID, '_spplo_custom_fields', true)) . '</pre>';
     echo '<p><strong>Metadata JSON</strong></p><pre style="white-space:pre-wrap;">' . esc_html($metadata_json) . '</pre>';
     echo '</details>';
+  }
+
+  public static function metabox_send_email($post) {
+    $customer_email = get_post_meta($post->ID, '_spplo_customer_email', true);
+    $sent_at = get_post_meta($post->ID, '_spplo_email_sent_at', true);
+    $history = get_post_meta($post->ID, '_spplo_email_history', true);
+    if (!is_array($history)) {
+      $history = [];
+    }
+
+    echo '<p><strong>Customer:</strong> ' . esc_html($customer_email ?: '—') . '</p>';
+    echo '<p><strong>Last sent:</strong> ' . esc_html($sent_at ?: '—') . '</p>';
+
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+    echo '<input type="hidden" name="action" value="spplo_send_mapped_email" />';
+    echo '<input type="hidden" name="post_id" value="' . esc_attr($post->ID) . '" />';
+    wp_nonce_field('spplo_send_mapped_email_' . $post->ID, 'spplo_send_mapped_email_nonce');
+    submit_button('Resend Download Email', 'primary', 'submit', false);
+    echo '</form>';
+
+    echo '<hr>';
+    echo '<h4>Send Custom Email</h4>';
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+    echo '<input type="hidden" name="action" value="spplo_send_custom_email" />';
+    echo '<input type="hidden" name="post_id" value="' . esc_attr($post->ID) . '" />';
+    wp_nonce_field('spplo_send_custom_email_' . $post->ID, 'spplo_send_custom_email_nonce');
+    echo '<p><label for="spplo_custom_subject"><strong>Subject</strong></label></p>';
+    echo '<p><input type="text" class="widefat" name="spplo_custom_subject" id="spplo_custom_subject" /></p>';
+    echo '<p><label for="spplo_custom_body"><strong>Body</strong></label></p>';
+    echo '<p><textarea class="widefat" rows="6" name="spplo_custom_body" id="spplo_custom_body"></textarea></p>';
+    echo '<p><label for="spplo_custom_download"><strong>Optional download link</strong></label></p>';
+    echo '<p><input type="url" class="widefat" name="spplo_custom_download" id="spplo_custom_download" /></p>';
+    submit_button('Send Custom Email', 'secondary', 'submit', false);
+    echo '</form>';
+
+    echo '<hr>';
+    echo '<h4>Send History</h4>';
+    if (empty($history)) {
+      echo '<p>—</p>';
+    } else {
+      echo '<div style="max-height:220px; overflow:auto;">';
+      echo '<table class="widefat striped" style="font-size:12px;">';
+      echo '<tr><th>Time</th><th>User</th><th>Type</th><th>Status</th></tr>';
+      $history = array_reverse($history);
+      foreach ($history as $entry) {
+        $time = esc_html((string)($entry['timestamp'] ?? ''));
+        $user_id = (int)($entry['user_id'] ?? 0);
+        $user = $user_id ? get_user_by('id', $user_id) : null;
+        $user_name = $user ? $user->display_name : 'System';
+        $type = esc_html((string)($entry['template_type'] ?? ''));
+        $status = !empty($entry['success']) ? 'Sent' : 'Failed';
+        echo '<tr>';
+        echo '<td>' . $time . '</td>';
+        echo '<td>' . esc_html($user_name) . '</td>';
+        echo '<td>' . $type . '</td>';
+        echo '<td>' . esc_html($status) . '</td>';
+        echo '</tr>';
+      }
+      echo '</table>';
+      echo '</div>';
+    }
+  }
+
+  public static function handle_admin_send_mapped_email() {
+    $post_id = isset($_POST['post_id']) ? (int)$_POST['post_id'] : 0;
+    if (!$post_id) {
+      wp_die('Invalid order.');
+    }
+
+    check_admin_referer('spplo_send_mapped_email_' . $post_id, 'spplo_send_mapped_email_nonce');
+
+    if (!current_user_can('edit_post', $post_id)) {
+      wp_die('Insufficient permissions.');
+    }
+
+    $post = get_post($post_id);
+    if (!$post || $post->post_type !== self::CPT) {
+      wp_die('Invalid order.');
+    }
+
+    $rate_limit = self::check_rate_limit($post_id, 'mapped');
+    if (is_wp_error($rate_limit)) {
+      self::redirect_with_notice($post_id, 'error', $rate_limit->get_error_message());
+    }
+
+    $resolved_json = (string)get_post_meta($post_id, '_spplo_resolved_links', true);
+    $resolved_links = json_decode($resolved_json, true);
+    if (!is_array($resolved_links)) {
+      $resolved_links = [];
+    }
+
+    $email_context = self::build_mapped_email_context($post_id, $resolved_links, [
+      'template_type' => 'mapped',
+    ]);
+
+    if (is_wp_error($email_context)) {
+      self::log_error($email_context->get_error_message(), ['post_id' => $post_id]);
+      self::redirect_with_notice($post_id, 'error', $email_context->get_error_message());
+    }
+
+    $result = self::send_customer_email($post_id, $email_context, 'manual');
+    self::redirect_with_notice($post_id, $result['success'] ? 'success' : 'error', $result['message']);
+  }
+
+  public static function handle_admin_send_custom_email() {
+    $post_id = isset($_POST['post_id']) ? (int)$_POST['post_id'] : 0;
+    if (!$post_id) {
+      wp_die('Invalid order.');
+    }
+
+    check_admin_referer('spplo_send_custom_email_' . $post_id, 'spplo_send_custom_email_nonce');
+
+    if (!current_user_can('edit_post', $post_id)) {
+      wp_die('Insufficient permissions.');
+    }
+
+    $post = get_post($post_id);
+    if (!$post || $post->post_type !== self::CPT) {
+      wp_die('Invalid order.');
+    }
+
+    $rate_limit = self::check_rate_limit($post_id, 'custom');
+    if (is_wp_error($rate_limit)) {
+      self::redirect_with_notice($post_id, 'error', $rate_limit->get_error_message());
+    }
+
+    $subject = isset($_POST['spplo_custom_subject']) ? sanitize_text_field(wp_unslash($_POST['spplo_custom_subject'])) : '';
+    $body = isset($_POST['spplo_custom_body']) ? wp_kses_post(wp_unslash($_POST['spplo_custom_body'])) : '';
+    $download = isset($_POST['spplo_custom_download']) ? esc_url_raw(wp_unslash($_POST['spplo_custom_download'])) : '';
+
+    if ($subject === '' || $body === '') {
+      self::redirect_with_notice($post_id, 'error', 'Custom subject and body are required.');
+    }
+
+    $to = get_post_meta($post_id, '_spplo_customer_email', true);
+    $customer_name = get_post_meta($post_id, '_spplo_customer_name', true);
+
+    if (!is_email($to)) {
+      self::redirect_with_notice($post_id, 'error', 'Customer email is invalid or missing.');
+    }
+
+    $links = [];
+    if ($download) {
+      $links[] = [
+        'label' => 'Download',
+        'url' => $download,
+      ];
+    }
+
+    $links_html = self::build_links_html($links);
+    $links_text = self::build_links_text($links);
+
+    $body_html = $body;
+    if ($links_html !== '') {
+      $body_html .= '<br><br>' . $links_html;
+    }
+
+    $body_text = wp_strip_all_tags($body);
+    if ($links_text !== '') {
+      $body_text .= "\n\n" . $links_text;
+    }
+
+    $context = [
+      'post_id' => $post_id,
+      'to' => $to,
+      'customer_name' => $customer_name,
+      'template_key' => 'custom',
+      'template_type' => 'custom',
+      'item_name' => '',
+      'links' => $links,
+      'resolved_links' => [],
+      'download_url' => $download,
+      'subject' => $subject,
+      'html' => $body_html,
+      'text' => $body_text,
+    ];
+
+    $context['subject'] = apply_filters('spplo_email_subject', $context['subject'], $context);
+    $context['html'] = apply_filters('spplo_email_html', $context['html'], $context);
+    $context['text'] = apply_filters('spplo_email_text', $context['text'], $context);
+
+    $result = self::send_customer_email($post_id, $context, 'manual');
+    self::redirect_with_notice($post_id, $result['success'] ? 'success' : 'error', $result['message']);
+  }
+
+  private static function check_rate_limit($post_id, $type) {
+    $history = get_post_meta($post_id, '_spplo_email_history', true);
+    if (!is_array($history) || empty($history)) {
+      return true;
+    }
+
+    $last = end($history);
+    $timestamp = isset($last['timestamp']) ? strtotime((string)$last['timestamp']) : 0;
+    $last_type = (string)($last['template_type'] ?? '');
+
+    if ($timestamp && (time() - $timestamp) < 60 && $last_type === $type) {
+      return new WP_Error('spplo_rate_limit', 'Please wait before sending another email.');
+    }
+
+    return true;
+  }
+
+  private static function redirect_with_notice($post_id, $type, $message) {
+    $url = add_query_arg([
+      'post' => $post_id,
+      'action' => 'edit',
+      'spplo_notice' => rawurlencode($message),
+      'spplo_notice_type' => $type,
+    ], admin_url('post.php'));
+    wp_safe_redirect($url);
+    exit;
+  }
+
+  public static function admin_notices() {
+    if (!isset($_GET['spplo_notice'], $_GET['spplo_notice_type'])) {
+      return;
+    }
+
+    $message = sanitize_text_field(wp_unslash($_GET['spplo_notice']));
+    $type = sanitize_text_field(wp_unslash($_GET['spplo_notice_type']));
+
+    $class = ($type === 'success') ? 'notice notice-success' : 'notice notice-error';
+    echo '<div class="' . esc_attr($class) . '"><p>' . esc_html($message) . '</p></div>';
   }
 }
 
