@@ -1328,14 +1328,13 @@ class SPPLO_Stripe_Payment_Link_Orders {
     $default_subject = get_option(self::OPT_EMAIL_SUBJECT, 'Your links for Order #{order_id}');
     $default_subject = str_replace('{order_id}', (string)$post->ID, (string)$default_subject);
 
-    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
     wp_nonce_field('spplo_send_order_email', 'spplo_send_order_email_nonce');
     echo '<input type="hidden" name="action" value="spplo_send_order_email" />';
     echo '<input type="hidden" name="post_id" value="' . esc_attr((string)$post->ID) . '" />';
 
     echo '<p><strong>Customer Email:</strong><br>' . esc_html($email ?: '—') . '</p>';
     echo '<p>';
-    echo '<button type="submit" name="spplo_send_action" value="resend" class="button button-secondary">';
+    echo '<button type="submit" name="spplo_send_action" value="resend" class="button button-secondary" formmethod="post" formaction="' . esc_url(admin_url('admin-post.php')) . '">';
     echo esc_html__('Resend Download Email', 'spplo');
     echo '</button>';
     echo '</p>';
@@ -1355,11 +1354,10 @@ class SPPLO_Stripe_Payment_Link_Orders {
     echo '<input type="url" class="widefat" id="spplo_custom_download_link" name="spplo_custom_download_link" placeholder="https://example.com/download" />';
     echo '</p>';
     echo '<p>';
-    echo '<button type="submit" name="spplo_send_action" value="custom" class="button button-primary">';
+    echo '<button type="submit" name="spplo_send_action" value="custom" class="button button-primary" formmethod="post" formaction="' . esc_url(admin_url('admin-post.php')) . '">';
     echo esc_html__('Send Custom Email', 'spplo');
     echo '</button>';
     echo '</p>';
-    echo '</form>';
 
     $history = self::get_email_audit_log($post->ID);
     echo '<hr>';
