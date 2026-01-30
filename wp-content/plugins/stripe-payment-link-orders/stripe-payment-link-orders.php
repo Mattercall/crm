@@ -31,6 +31,11 @@ class SPPLO_Stripe_Payment_Link_Orders {
   const OPT_FLUENTCRM_TAG_ID  = 'spplo_fluentcrm_tag_id';
 
   const CPT = 'stripe_order';
+  const META_EMAIL_AUDIT_LOG = '_spplo_email_audit_log';
+  const META_LAST_EMAIL_HASH = '_spplo_last_email_hash';
+
+  const EMAIL_RATE_LIMIT_SECONDS = 60;
+  const EMAIL_DUPLICATE_SECONDS = 600;
 
   public static function init() {
     add_action('init', [__CLASS__, 'register_cpt']);
@@ -43,6 +48,8 @@ class SPPLO_Stripe_Payment_Link_Orders {
     add_action('manage_' . self::CPT . '_posts_custom_column', [__CLASS__, 'column_content'], 10, 2);
 
     add_action('add_meta_boxes', [__CLASS__, 'add_metaboxes']);
+    add_action('admin_post_spplo_send_order_email', [__CLASS__, 'handle_admin_send_order_email']);
+    add_action('admin_notices', [__CLASS__, 'admin_notices']);
 
     add_action('spplo_order_created', [__CLASS__, 'sync_fluentcrm_contact'], 10, 4);
   }
@@ -847,12 +854,21 @@ class SPPLO_Stripe_Payment_Link_Orders {
     $already = get_post_meta($post_id, '_spplo_email_sent_at', true);
     if (!empty($already)) return;
 
+    $send_result = self::send_download_email($post_id, $resolved_links, false);
+    if (!$send_result['ok']) {
+      update_post_meta($post_id, '_spplo_email_error', $send_result['message']);
+    }
+  }
+
+  private static function send_download_email($post_id, array $resolved_links, $allow_duplicate) {
     $to = get_post_meta($post_id, '_spplo_customer_email', true);
     $customer_name = get_post_meta($post_id, '_spplo_customer_name', true);
 
     if (!is_email($to)) {
-      update_post_meta($post_id, '_spplo_email_error', 'Customer email is invalid or missing.');
-      return;
+      return [
+        'ok' => false,
+        'message' => 'Customer email is invalid or missing.',
+      ];
     }
 
     // If there are zero links for all items, we still send (optional). Change to "return" if you prefer.
@@ -865,6 +881,48 @@ class SPPLO_Stripe_Payment_Link_Orders {
     $from_email = (string)get_option(self::OPT_EMAIL_FROM_EMAIL, get_option('admin_email'));
     if (!is_email($from_email)) $from_email = get_option('admin_email');
 
+    $built = self::build_download_email_content($post_id, $resolved_links, $customer_name, $has_any_link);
+    $subject = $built['subject'];
+    $html = $built['html'];
+
+    // headers
+    $headers = [];
+    $headers[] = 'Content-Type: text/html; charset=UTF-8';
+    $headers[] = 'From: ' . self::sanitize_email_header_name($from_name) . ' <' . $from_email . '>';
+
+    if (!$allow_duplicate) {
+      $last_hash = (string)get_post_meta($post_id, self::META_LAST_EMAIL_HASH, true);
+      $current_hash = md5($to . '|' . $subject . '|' . $html . '|download');
+      if ($last_hash === $current_hash) {
+        return [
+          'ok' => false,
+          'message' => 'Duplicate email detected.',
+        ];
+      }
+    }
+
+    $ok = wp_mail($to, $subject, $html, $headers);
+
+    if ($ok) {
+      update_post_meta($post_id, '_spplo_email_sent_at', gmdate('c'));
+      update_post_meta($post_id, '_spplo_email_to', sanitize_email($to));
+      update_post_meta($post_id, '_spplo_email_subject', sanitize_text_field($subject));
+      update_post_meta($post_id, self::META_LAST_EMAIL_HASH, md5($to . '|' . $subject . '|' . $html . '|download'));
+      return [
+        'ok' => true,
+        'message' => '',
+        'subject' => $subject,
+        'to' => $to,
+      ];
+    } else {
+      return [
+        'ok' => false,
+        'message' => 'wp_mail() failed. Check server mail configuration / SMTP.',
+      ];
+    }
+  }
+
+  private static function build_download_email_content($post_id, array $resolved_links, $customer_name, $has_any_link) {
     $subject_tpl = (string)get_option(self::OPT_EMAIL_SUBJECT, 'Your links for Order #{order_id}');
     $subject = str_replace(
       ['{order_id}', '{customer_name}'],
@@ -923,20 +981,10 @@ class SPPLO_Stripe_Payment_Link_Orders {
     $html .= '<p>If you have any questions, reply to this email.</p>';
     $html .= '</div>';
 
-    // headers
-    $headers = [];
-    $headers[] = 'Content-Type: text/html; charset=UTF-8';
-    $headers[] = 'From: ' . self::sanitize_email_header_name($from_name) . ' <' . $from_email . '>';
-
-    $ok = wp_mail($to, $subject, $html, $headers);
-
-    if ($ok) {
-      update_post_meta($post_id, '_spplo_email_sent_at', gmdate('c'));
-      update_post_meta($post_id, '_spplo_email_to', sanitize_email($to));
-      update_post_meta($post_id, '_spplo_email_subject', sanitize_text_field($subject));
-    } else {
-      update_post_meta($post_id, '_spplo_email_error', 'wp_mail() failed. Check server mail configuration / SMTP.');
-    }
+    return [
+      'subject' => $subject,
+      'html' => $html,
+    ];
   }
 
   private static function sanitize_email_header_name($name) {
@@ -997,6 +1045,15 @@ class SPPLO_Stripe_Payment_Link_Orders {
       self::CPT,
       'normal',
       'high'
+    );
+
+    add_meta_box(
+      'spplo_send_email',
+      'Send Email',
+      [__CLASS__, 'metabox_send_email'],
+      self::CPT,
+      'side',
+      'default'
     );
   }
 
@@ -1163,6 +1220,274 @@ class SPPLO_Stripe_Payment_Link_Orders {
     echo '<p><strong>Custom Fields JSON</strong></p><pre style="white-space:pre-wrap;">' . esc_html((string)get_post_meta($post->ID, '_spplo_custom_fields', true)) . '</pre>';
     echo '<p><strong>Metadata JSON</strong></p><pre style="white-space:pre-wrap;">' . esc_html($metadata_json) . '</pre>';
     echo '</details>';
+  }
+
+  public static function metabox_send_email($post) {
+    if (!current_user_can('edit_post', $post->ID)) {
+      echo '<p>' . esc_html__('You do not have permission to send emails for this order.', 'spplo') . '</p>';
+      return;
+    }
+
+    $email = get_post_meta($post->ID, '_spplo_customer_email', true);
+    $default_subject = get_option(self::OPT_EMAIL_SUBJECT, 'Your links for Order #{order_id}');
+    $default_subject = str_replace('{order_id}', (string)$post->ID, (string)$default_subject);
+
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+    wp_nonce_field('spplo_send_order_email', 'spplo_send_order_email_nonce');
+    echo '<input type="hidden" name="action" value="spplo_send_order_email" />';
+    echo '<input type="hidden" name="post_id" value="' . esc_attr((string)$post->ID) . '" />';
+
+    echo '<p><strong>Customer Email:</strong><br>' . esc_html($email ?: '—') . '</p>';
+    echo '<p>';
+    echo '<button type="submit" name="spplo_send_action" value="resend" class="button button-secondary">';
+    echo esc_html__('Resend Download Email', 'spplo');
+    echo '</button>';
+    echo '</p>';
+
+    echo '<hr>';
+    echo '<h4 style="margin:0 0 6px;">' . esc_html__('Send Custom Email', 'spplo') . '</h4>';
+    echo '<p>';
+    echo '<label for="spplo_custom_subject"><strong>' . esc_html__('Subject', 'spplo') . '</strong></label>';
+    echo '<input type="text" class="widefat" id="spplo_custom_subject" name="spplo_custom_subject" value="' . esc_attr($default_subject) . '" />';
+    echo '</p>';
+    echo '<p>';
+    echo '<label for="spplo_custom_body"><strong>' . esc_html__('Body', 'spplo') . '</strong></label>';
+    echo '<textarea class="widefat" rows="5" id="spplo_custom_body" name="spplo_custom_body"></textarea>';
+    echo '</p>';
+    echo '<p>';
+    echo '<label for="spplo_custom_download_link"><strong>' . esc_html__('Custom Download Link (optional)', 'spplo') . '</strong></label>';
+    echo '<input type="url" class="widefat" id="spplo_custom_download_link" name="spplo_custom_download_link" placeholder="https://example.com/download" />';
+    echo '</p>';
+    echo '<p>';
+    echo '<button type="submit" name="spplo_send_action" value="custom" class="button button-primary">';
+    echo esc_html__('Send Custom Email', 'spplo');
+    echo '</button>';
+    echo '</p>';
+    echo '</form>';
+
+    $history = self::get_email_audit_log($post->ID);
+    echo '<hr>';
+    echo '<h4 style="margin:0 0 6px;">' . esc_html__('Send History', 'spplo') . '</h4>';
+    if (empty($history)) {
+      echo '<p>' . esc_html__('No emails sent yet.', 'spplo') . '</p>';
+    } else {
+      echo '<div style="max-height:200px; overflow:auto;">';
+      echo '<table class="widefat striped">';
+      echo '<thead><tr>';
+      echo '<th>' . esc_html__('Time (UTC)', 'spplo') . '</th>';
+      echo '<th>' . esc_html__('Admin', 'spplo') . '</th>';
+      echo '<th>' . esc_html__('Type', 'spplo') . '</th>';
+      echo '<th>' . esc_html__('Subject', 'spplo') . '</th>';
+      echo '<th>' . esc_html__('Status', 'spplo') . '</th>';
+      echo '</tr></thead><tbody>';
+      foreach ($history as $entry) {
+        echo '<tr>';
+        echo '<td>' . esc_html($entry['timestamp'] ?? '—') . '</td>';
+        echo '<td>' . esc_html($entry['admin'] ?? '—') . '</td>';
+        echo '<td>' . esc_html($entry['type'] ?? '—') . '</td>';
+        echo '<td>' . esc_html($entry['subject'] ?? '—') . '</td>';
+        echo '<td>' . esc_html($entry['status'] ?? '—') . '</td>';
+        echo '</tr>';
+      }
+      echo '</tbody></table>';
+      echo '</div>';
+    }
+  }
+
+  public static function handle_admin_send_order_email() {
+    if (!current_user_can('edit_posts')) {
+      wp_die(esc_html__('You are not allowed to send emails.', 'spplo'));
+    }
+
+    $post_id = isset($_POST['post_id']) ? absint($_POST['post_id']) : 0;
+    if (!$post_id || get_post_type($post_id) !== self::CPT) {
+      wp_die(esc_html__('Invalid order.', 'spplo'));
+    }
+
+    if (!current_user_can('edit_post', $post_id)) {
+      wp_die(esc_html__('You are not allowed to send emails for this order.', 'spplo'));
+    }
+
+    check_admin_referer('spplo_send_order_email', 'spplo_send_order_email_nonce');
+
+    $action = isset($_POST['spplo_send_action']) ? sanitize_key(wp_unslash($_POST['spplo_send_action'])) : '';
+    $email_to = get_post_meta($post_id, '_spplo_customer_email', true);
+    $customer_name = get_post_meta($post_id, '_spplo_customer_name', true);
+
+    if (!is_email($email_to)) {
+      self::redirect_with_notice($post_id, 'error', 'Customer email is invalid or missing.');
+    }
+
+    $current_time = current_time('timestamp', true);
+    $history = self::get_email_audit_log($post_id);
+    $last_entry = !empty($history) ? $history[0] : null;
+    if ($last_entry && !empty($last_entry['timestamp_unix'])) {
+      $elapsed = $current_time - (int)$last_entry['timestamp_unix'];
+      if ($elapsed < self::EMAIL_RATE_LIMIT_SECONDS) {
+        self::redirect_with_notice($post_id, 'error', 'Please wait before sending another email.');
+      }
+    }
+
+    $subject = '';
+    $body = '';
+    $download_link = '';
+    $type = '';
+    $send_result = ['ok' => false, 'message' => ''];
+    $email_hash_source = '';
+
+    if ($action === 'resend') {
+      $type = 'download';
+      $resolved_json = (string)get_post_meta($post_id, '_spplo_resolved_links', true);
+      $resolved_links = json_decode($resolved_json, true);
+      if (!is_array($resolved_links)) {
+        $items_json = (string)get_post_meta($post_id, '_spplo_items', true);
+        $items = json_decode($items_json, true);
+        if (!is_array($items)) {
+          $items = [];
+        }
+        $resolved_links = self::resolve_links_for_items($items);
+      }
+
+      $has_any_link = false;
+      foreach ($resolved_links as $row) {
+        if (!empty($row['links'])) { $has_any_link = true; break; }
+      }
+      $built = self::build_download_email_content($post_id, $resolved_links, $customer_name, $has_any_link);
+      $subject = $built['subject'];
+      $body = $built['html'];
+      $email_hash_source = $email_to . '|' . $subject . '|' . $body . '|download';
+    } elseif ($action === 'custom') {
+      $type = 'custom';
+      $subject = isset($_POST['spplo_custom_subject']) ? sanitize_text_field(wp_unslash($_POST['spplo_custom_subject'])) : '';
+      $body = isset($_POST['spplo_custom_body']) ? wp_kses_post(wp_unslash($_POST['spplo_custom_body'])) : '';
+      $download_link = isset($_POST['spplo_custom_download_link']) ? esc_url_raw(wp_unslash($_POST['spplo_custom_download_link'])) : '';
+
+      if ($subject === '' || $body === '') {
+        self::redirect_with_notice($post_id, 'error', 'Subject and body are required for a custom email.');
+      }
+
+      $email_hash_source = $email_to . '|' . $subject . '|' . $body . '|' . $download_link . '|custom';
+    } else {
+      self::redirect_with_notice($post_id, 'error', 'Invalid email action.');
+    }
+
+    $hash = md5($email_hash_source);
+    if (!empty($last_entry['hash']) && $last_entry['hash'] === $hash) {
+      $elapsed = $current_time - (int)($last_entry['timestamp_unix'] ?? 0);
+      if ($elapsed < self::EMAIL_DUPLICATE_SECONDS) {
+        self::redirect_with_notice($post_id, 'error', 'Duplicate email detected recently.');
+      }
+    }
+
+    if ($action === 'resend') {
+      $send_result = self::send_download_email($post_id, $resolved_links, true);
+    } else {
+      $send_result = self::send_custom_email($post_id, $email_to, $customer_name, $subject, $body, $download_link);
+    }
+
+    $log_entry = [
+      'timestamp' => gmdate('c', $current_time),
+      'timestamp_unix' => $current_time,
+      'admin' => self::format_admin_user(get_current_user_id()),
+      'admin_id' => get_current_user_id(),
+      'subject' => $subject,
+      'type' => $type,
+      'status' => $send_result['ok'] ? 'success' : 'fail',
+      'message' => $send_result['message'],
+      'hash' => $hash,
+    ];
+    self::add_email_audit_log($post_id, $log_entry);
+
+    if ($send_result['ok']) {
+      self::redirect_with_notice($post_id, 'success', 'Email sent successfully.');
+    }
+
+    self::redirect_with_notice($post_id, 'error', $send_result['message'] ?: 'Email failed to send.');
+  }
+
+  private static function send_custom_email($post_id, $to, $customer_name, $subject, $body, $download_link) {
+    $from_name  = (string)get_option(self::OPT_EMAIL_FROM_NAME, get_bloginfo('name'));
+    $from_email = (string)get_option(self::OPT_EMAIL_FROM_EMAIL, get_option('admin_email'));
+    if (!is_email($from_email)) {
+      $from_email = get_option('admin_email');
+    }
+
+    $content = '<div style="font-family:Arial, sans-serif; font-size:14px; line-height:1.5;">';
+    $content .= '<p>Hi ' . esc_html($customer_name ? $customer_name : 'there') . ',</p>';
+    $content .= '<p>' . wp_kses_post(nl2br($body)) . '</p>';
+    if ($download_link) {
+      $content .= '<p><a href="' . esc_url($download_link) . '" target="_blank" rel="noopener noreferrer">' . esc_html__('Download Link', 'spplo') . '</a></p>';
+    }
+    $content .= '<p style="margin-top:16px;">Order ID: <strong>' . esc_html((string)$post_id) . '</strong></p>';
+    $content .= '</div>';
+
+    $headers = [];
+    $headers[] = 'Content-Type: text/html; charset=UTF-8';
+    $headers[] = 'From: ' . self::sanitize_email_header_name($from_name) . ' <' . $from_email . '>';
+
+    $ok = wp_mail($to, $subject, $content, $headers);
+
+    if ($ok) {
+      update_post_meta($post_id, '_spplo_email_sent_at', gmdate('c'));
+      update_post_meta($post_id, '_spplo_email_to', sanitize_email($to));
+      update_post_meta($post_id, '_spplo_email_subject', sanitize_text_field($subject));
+      update_post_meta($post_id, self::META_LAST_EMAIL_HASH, md5($to . '|' . $subject . '|' . $content . '|custom'));
+      return [
+        'ok' => true,
+        'message' => '',
+      ];
+    }
+
+    return [
+      'ok' => false,
+      'message' => 'wp_mail() failed. Check server mail configuration / SMTP.',
+    ];
+  }
+
+  private static function get_email_audit_log($post_id) {
+    $history = get_post_meta($post_id, self::META_EMAIL_AUDIT_LOG, true);
+    if (!is_array($history)) {
+      $history = [];
+    }
+
+    return $history;
+  }
+
+  private static function add_email_audit_log($post_id, array $entry) {
+    $history = self::get_email_audit_log($post_id);
+    array_unshift($history, $entry);
+    $history = array_slice($history, 0, 50);
+    update_post_meta($post_id, self::META_EMAIL_AUDIT_LOG, $history);
+  }
+
+  private static function format_admin_user($user_id) {
+    $user = get_user_by('id', $user_id);
+    if (!$user) {
+      return 'Unknown';
+    }
+    $name = $user->display_name ? $user->display_name : $user->user_login;
+    return $name . ' (#' . $user->ID . ')';
+  }
+
+  private static function redirect_with_notice($post_id, $type, $message) {
+    $url = admin_url('post.php?post=' . (int)$post_id . '&action=edit');
+    $url = add_query_arg([
+      'spplo_email_notice' => $type,
+      'spplo_email_message' => rawurlencode($message),
+    ], $url);
+    wp_safe_redirect($url);
+    exit;
+  }
+
+  public static function admin_notices() {
+    if (empty($_GET['spplo_email_notice']) || empty($_GET['spplo_email_message'])) {
+      return;
+    }
+
+    $type = sanitize_key(wp_unslash($_GET['spplo_email_notice']));
+    $message = sanitize_text_field(wp_unslash($_GET['spplo_email_message']));
+    $class = $type === 'success' ? 'notice notice-success' : 'notice notice-error';
+    echo '<div class="' . esc_attr($class) . '"><p>' . esc_html($message) . '</p></div>';
   }
 }
 
