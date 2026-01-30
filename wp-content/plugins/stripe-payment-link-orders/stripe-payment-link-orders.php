@@ -1328,13 +1328,15 @@ class SPPLO_Stripe_Payment_Link_Orders {
     $default_subject = get_option(self::OPT_EMAIL_SUBJECT, 'Your links for Order #{order_id}');
     $default_subject = str_replace('{order_id}', (string)$post->ID, (string)$default_subject);
 
-    wp_nonce_field('spplo_send_order_email', 'spplo_send_order_email_nonce');
-    echo '<input type="hidden" name="action" value="spplo_send_order_email" />';
-    echo '<input type="hidden" name="post_id" value="' . esc_attr((string)$post->ID) . '" />';
+    echo '<form id="spplo_send_email_form" method="post" action="' . esc_url(admin_url('admin-post.php')) . '"></form>';
+    $nonce_field = wp_nonce_field('spplo_send_order_email', 'spplo_send_order_email_nonce', true, false);
+    echo str_replace('<input ', '<input form="spplo_send_email_form" ', $nonce_field);
+    echo '<input type="hidden" name="action" value="spplo_send_order_email" form="spplo_send_email_form" />';
+    echo '<input type="hidden" name="post_id" value="' . esc_attr((string)$post->ID) . '" form="spplo_send_email_form" />';
 
     echo '<p><strong>Customer Email:</strong><br>' . esc_html($email ?: '—') . '</p>';
     echo '<p>';
-    echo '<button type="submit" name="spplo_send_action" value="resend" class="button button-secondary" formmethod="post" formaction="' . esc_url(admin_url('admin-post.php')) . '">';
+    echo '<button type="submit" name="spplo_send_action" value="resend" class="button button-secondary" form="spplo_send_email_form" formmethod="post" formaction="' . esc_url(admin_url('admin-post.php')) . '">';
     echo esc_html__('Resend Download Email', 'spplo');
     echo '</button>';
     echo '</p>';
@@ -1343,18 +1345,18 @@ class SPPLO_Stripe_Payment_Link_Orders {
     echo '<h4 style="margin:0 0 6px;">' . esc_html__('Send Custom Email', 'spplo') . '</h4>';
     echo '<p>';
     echo '<label for="spplo_custom_subject"><strong>' . esc_html__('Subject', 'spplo') . '</strong></label>';
-    echo '<input type="text" class="widefat" id="spplo_custom_subject" name="spplo_custom_subject" value="' . esc_attr($default_subject) . '" />';
+    echo '<input type="text" class="widefat" id="spplo_custom_subject" name="spplo_custom_subject" value="' . esc_attr($default_subject) . '" form="spplo_send_email_form" />';
     echo '</p>';
     echo '<p>';
     echo '<label for="spplo_custom_body"><strong>' . esc_html__('Body', 'spplo') . '</strong></label>';
-    echo '<textarea class="widefat" rows="5" id="spplo_custom_body" name="spplo_custom_body"></textarea>';
+    echo '<textarea class="widefat" rows="5" id="spplo_custom_body" name="spplo_custom_body" form="spplo_send_email_form"></textarea>';
     echo '</p>';
     echo '<p>';
     echo '<label for="spplo_custom_download_link"><strong>' . esc_html__('Custom Download Link (optional)', 'spplo') . '</strong></label>';
-    echo '<input type="url" class="widefat" id="spplo_custom_download_link" name="spplo_custom_download_link" placeholder="https://example.com/download" />';
+    echo '<input type="url" class="widefat" id="spplo_custom_download_link" name="spplo_custom_download_link" placeholder="https://example.com/download" form="spplo_send_email_form" />';
     echo '</p>';
     echo '<p>';
-    echo '<button type="submit" name="spplo_send_action" value="custom" class="button button-primary" formmethod="post" formaction="' . esc_url(admin_url('admin-post.php')) . '">';
+    echo '<button type="submit" name="spplo_send_action" value="custom" class="button button-primary" form="spplo_send_email_form" formmethod="post" formaction="' . esc_url(admin_url('admin-post.php')) . '">';
     echo esc_html__('Send Custom Email', 'spplo');
     echo '</button>';
     echo '</p>';
