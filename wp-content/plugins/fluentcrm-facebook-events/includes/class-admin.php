@@ -170,6 +170,12 @@ class FCRM_FB_Events_Admin
 
     public static function get_default_settings()
     {
+        $mapping_definitions = self::get_mapping_definitions();
+        $mapping_defaults = [];
+        foreach ($mapping_definitions as $key => $definition) {
+            $mapping_defaults[$key] = [$definition['defaults']];
+        }
+
         return [
             'enabled' => 'no',
             'pixel_id' => '',
@@ -204,60 +210,7 @@ class FCRM_FB_Events_Admin
                 'phone' => 'phone',
                 'lead_id' => '',
             ],
-            'mappings' => [
-                'tag_applied' => [
-                    'label' => __('Tag Applied', 'fluentcrm-facebook-events'),
-                    'enabled' => 'no',
-                    'event_name' => 'Lead',
-                    'send_custom_event' => 'no',
-                    'custom_event_name' => '',
-                    'tag_ids' => [],
-                    'value' => '',
-                    'currency' => 'USD',
-                    'custom_params' => '',
-                ],
-                'tag_removed' => [
-                    'label' => __('Tag Removed', 'fluentcrm-facebook-events'),
-                    'enabled' => 'no',
-                    'event_name' => 'Lead',
-                    'send_custom_event' => 'no',
-                    'custom_event_name' => '',
-                    'tag_ids' => [],
-                    'value' => '',
-                    'currency' => 'USD',
-                    'custom_params' => '',
-                ],
-                'contact_created' => [
-                    'label' => __('Contact Created', 'fluentcrm-facebook-events'),
-                    'enabled' => 'no',
-                    'event_name' => 'CompleteRegistration',
-                    'send_custom_event' => 'no',
-                    'custom_event_name' => '',
-                    'value' => '',
-                    'currency' => 'USD',
-                    'custom_params' => '',
-                ],
-                'email_opened' => [
-                    'label' => __('Email Opened', 'fluentcrm-facebook-events'),
-                    'enabled' => 'no',
-                    'event_name' => 'ViewContent',
-                    'send_custom_event' => 'no',
-                    'custom_event_name' => '',
-                    'value' => '',
-                    'currency' => 'USD',
-                    'custom_params' => '',
-                ],
-                'email_clicked' => [
-                    'label' => __('Email Link Clicked', 'fluentcrm-facebook-events'),
-                    'enabled' => 'no',
-                    'event_name' => 'ViewContent',
-                    'send_custom_event' => 'no',
-                    'custom_event_name' => '',
-                    'value' => '',
-                    'currency' => 'USD',
-                    'custom_params' => '',
-                ],
-            ],
+            'mappings' => $mapping_defaults,
         ];
     }
 
@@ -267,11 +220,7 @@ class FCRM_FB_Events_Admin
         $settings = get_option(FCRM_FB_EVENTS_OPTION_KEY, []);
 
         $settings = wp_parse_args($settings, $defaults);
-        $settings['mappings'] = array_intersect_key($settings['mappings'], $defaults['mappings']);
-
-        foreach ($defaults['mappings'] as $key => $mapping) {
-            $settings['mappings'][$key] = wp_parse_args($settings['mappings'][$key] ?? [], $mapping);
-        }
+        $settings['mappings'] = self::normalize_mappings($settings['mappings'], $defaults['mappings']);
 
         $settings['lead_ads'] = wp_parse_args($settings['lead_ads'] ?? [], $defaults['lead_ads']);
         $settings['lead_field_mapping'] = is_array($settings['lead_field_mapping'] ?? null)
@@ -303,22 +252,31 @@ class FCRM_FB_Events_Admin
             'send_mode' => in_array(($input['send_mode'] ?? 'immediate'), ['immediate', 'queue'], true) ? $input['send_mode'] : 'immediate',
             'debug_logging' => !empty($input['debug_logging']) ? 'yes' : 'no',
             'delete_data_on_uninstall' => !empty($input['delete_data_on_uninstall']) ? 'yes' : 'no',
-            'mappings' => $defaults['mappings'],
+            'mappings' => [],
         ]);
 
-        foreach ($defaults['mappings'] as $key => $mapping) {
+        foreach (self::get_mapping_definitions() as $key => $definition) {
             $map_input = $input['mappings'][$key] ?? [];
-            $settings['mappings'][$key]['enabled'] = !empty($map_input['enabled']) ? 'yes' : 'no';
-            $settings['mappings'][$key]['event_name'] = sanitize_text_field($map_input['event_name'] ?? $mapping['event_name']);
-            $settings['mappings'][$key]['send_custom_event'] = !empty($map_input['send_custom_event']) ? 'yes' : 'no';
-            $settings['mappings'][$key]['custom_event_name'] = sanitize_text_field($map_input['custom_event_name'] ?? '');
-            if (in_array($key, ['tag_applied', 'tag_removed'], true)) {
-                $tag_ids = array_map('absint', (array) ($map_input['tag_ids'] ?? []));
-                $settings['mappings'][$key]['tag_ids'] = array_values(array_filter(array_unique($tag_ids)));
+            if (!is_array($map_input)) {
+                $map_input = [];
             }
-            $settings['mappings'][$key]['value'] = sanitize_text_field($map_input['value'] ?? '');
-            $settings['mappings'][$key]['currency'] = sanitize_text_field($map_input['currency'] ?? $mapping['currency']);
-            $settings['mappings'][$key]['custom_params'] = $this->sanitize_custom_params($map_input['custom_params'] ?? '');
+            if (isset($map_input['enabled']) || isset($map_input['event_name']) || isset($map_input['send_custom_event'])) {
+                $map_input = [$map_input];
+            }
+
+            $rows = [];
+            foreach ($map_input as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $rows[] = $this->sanitize_mapping_row($key, $row, $definition['defaults']);
+            }
+
+            if (empty($rows)) {
+                $rows[] = $this->sanitize_mapping_row($key, [], $definition['defaults']);
+            }
+
+            $settings['mappings'][$key] = $rows;
         }
 
         update_option(FCRM_FB_EVENTS_OPTION_KEY, $settings, false);
@@ -577,6 +535,129 @@ class FCRM_FB_Events_Admin
         return '';
     }
 
+    private static function get_mapping_definitions()
+    {
+        return [
+            'tag_applied' => [
+                'label' => __('Tag Applied', 'fluentcrm-facebook-events'),
+                'supports_tags' => true,
+                'defaults' => [
+                    'enabled' => 'no',
+                    'event_name' => 'Lead',
+                    'send_custom_event' => 'no',
+                    'custom_event_name' => '',
+                    'tag_ids' => [],
+                    'value' => '',
+                    'currency' => 'USD',
+                    'custom_params' => '',
+                ],
+            ],
+            'tag_removed' => [
+                'label' => __('Tag Removed', 'fluentcrm-facebook-events'),
+                'supports_tags' => true,
+                'defaults' => [
+                    'enabled' => 'no',
+                    'event_name' => 'Lead',
+                    'send_custom_event' => 'no',
+                    'custom_event_name' => '',
+                    'tag_ids' => [],
+                    'value' => '',
+                    'currency' => 'USD',
+                    'custom_params' => '',
+                ],
+            ],
+            'contact_created' => [
+                'label' => __('Contact Created', 'fluentcrm-facebook-events'),
+                'supports_tags' => false,
+                'defaults' => [
+                    'enabled' => 'no',
+                    'event_name' => 'CompleteRegistration',
+                    'send_custom_event' => 'no',
+                    'custom_event_name' => '',
+                    'value' => '',
+                    'currency' => 'USD',
+                    'custom_params' => '',
+                ],
+            ],
+            'email_opened' => [
+                'label' => __('Email Opened', 'fluentcrm-facebook-events'),
+                'supports_tags' => false,
+                'defaults' => [
+                    'enabled' => 'no',
+                    'event_name' => 'ViewContent',
+                    'send_custom_event' => 'no',
+                    'custom_event_name' => '',
+                    'value' => '',
+                    'currency' => 'USD',
+                    'custom_params' => '',
+                ],
+            ],
+            'email_clicked' => [
+                'label' => __('Email Link Clicked', 'fluentcrm-facebook-events'),
+                'supports_tags' => false,
+                'defaults' => [
+                    'enabled' => 'no',
+                    'event_name' => 'ViewContent',
+                    'send_custom_event' => 'no',
+                    'custom_event_name' => '',
+                    'value' => '',
+                    'currency' => 'USD',
+                    'custom_params' => '',
+                ],
+            ],
+        ];
+    }
+
+    private static function normalize_mappings($mappings, $default_mappings)
+    {
+        $definitions = self::get_mapping_definitions();
+        $normalized = [];
+
+        foreach ($definitions as $key => $definition) {
+            $raw = $mappings[$key] ?? [];
+            if (!is_array($raw)) {
+                $raw = [];
+            }
+            if (isset($raw['enabled']) || isset($raw['event_name']) || isset($raw['send_custom_event'])) {
+                $raw = [$raw];
+            }
+            $rows = [];
+            foreach ($raw as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $rows[] = wp_parse_args($row, $definition['defaults']);
+            }
+            if (empty($rows)) {
+                $rows = $default_mappings[$key] ?? [$definition['defaults']];
+            }
+
+            $normalized[$key] = array_values($rows);
+        }
+
+        return $normalized;
+    }
+
+    private function sanitize_mapping_row($trigger, array $map_input, array $defaults)
+    {
+        $row = [
+            'enabled' => !empty($map_input['enabled']) ? 'yes' : 'no',
+            'event_name' => sanitize_text_field($map_input['event_name'] ?? $defaults['event_name']),
+            'send_custom_event' => !empty($map_input['send_custom_event']) ? 'yes' : 'no',
+            'custom_event_name' => sanitize_text_field($map_input['custom_event_name'] ?? ''),
+            'value' => sanitize_text_field($map_input['value'] ?? ''),
+            'currency' => sanitize_text_field($map_input['currency'] ?? $defaults['currency']),
+            'custom_params' => $this->sanitize_custom_params($map_input['custom_params'] ?? ''),
+        ];
+
+        if (in_array($trigger, ['tag_applied', 'tag_removed'], true)) {
+            $tag_ids = array_map('absint', (array) ($map_input['tag_ids'] ?? []));
+            $row['tag_ids'] = array_values(array_filter(array_unique($tag_ids)));
+        }
+
+        return $row;
+    }
+
     public function render_settings_page()
     {
         if (!current_user_can('manage_options')) {
@@ -587,6 +668,7 @@ class FCRM_FB_Events_Admin
         $logs = FCRM_FB_Events_Logger::get_logs(100);
         $updated = !empty($_GET['updated']);
         $tags = $this->get_available_tags();
+        $mapping_definitions = self::get_mapping_definitions();
         $event_options = [
             'Lead',
             'CompleteRegistration',
@@ -643,20 +725,66 @@ class FCRM_FB_Events_Admin
         echo '<th>' . esc_html__('Value', 'fluentcrm-facebook-events') . '</th>';
         echo '<th>' . esc_html__('Currency', 'fluentcrm-facebook-events') . '</th>';
         echo '<th>' . esc_html__('Custom Params (JSON)', 'fluentcrm-facebook-events') . '</th>';
+        echo '<th>' . esc_html__('Actions', 'fluentcrm-facebook-events') . '</th>';
         echo '</tr></thead><tbody>';
 
-        foreach ($settings['mappings'] as $key => $mapping) {
-            echo '<tr>';
-            echo '<td>' . esc_html($mapping['label']) . '</td>';
+        foreach ($mapping_definitions as $key => $definition) {
+            $rows = $settings['mappings'][$key] ?? [$definition['defaults']];
+            $rows = is_array($rows) ? array_values($rows) : [$definition['defaults']];
+            foreach ($rows as $index => $mapping) {
+                $mapping = wp_parse_args($mapping, $definition['defaults']);
+                $name_prefix = 'mappings[' . esc_attr($key) . '][' . esc_attr($index) . ']';
+                echo '<tr class="fcrm-fb-events-mapping-row" data-trigger="' . esc_attr($key) . '">';
+                echo '<td>' . esc_html($definition['label']) . '</td>';
+                echo '<td>';
+                if ($definition['supports_tags']) {
+                    if (empty($tags)) {
+                        echo '<em>' . esc_html__('No tags available.', 'fluentcrm-facebook-events') . '</em>';
+                    } else {
+                        echo '<select name="' . $name_prefix . '[tag_ids][]" multiple="multiple" size="4">';
+                        foreach ($tags as $tag) {
+                            $selected = in_array((int) $tag->id, (array) $mapping['tag_ids'], true);
+                            echo '<option value="' . esc_attr($tag->id) . '" ' . selected(true, $selected, false) . '>' . esc_html($tag->title) . '</option>';
+                        }
+                        echo '</select>';
+                        echo '<br /><span class="description">' . esc_html__('Select at least one tag to send this event.', 'fluentcrm-facebook-events') . '</span>';
+                    }
+                } else {
+                    echo '&mdash;';
+                }
+                echo '</td>';
+                echo '<td><input type="checkbox" name="' . $name_prefix . '[enabled]" value="1" ' . checked('yes', $mapping['enabled'], false) . ' /></td>';
+                echo '<td><select name="' . $name_prefix . '[event_name]">';
+                foreach ($event_options as $option) {
+                    echo '<option value="' . esc_attr($option) . '" ' . selected($option, $mapping['event_name'], false) . '>' . esc_html($option) . '</option>';
+                }
+                echo '</select></td>';
+                echo '<td>';
+                echo '<label><input type="checkbox" name="' . $name_prefix . '[send_custom_event]" value="1" ' . checked('yes', $mapping['send_custom_event'], false) . ' /> ' . esc_html__('Use custom event name', 'fluentcrm-facebook-events') . '</label><br />';
+                echo '<input type="text" class="regular-text" name="' . $name_prefix . '[custom_event_name]" value="' . esc_attr($mapping['custom_event_name']) . '" placeholder="' . esc_attr__('CustomEventName', 'fluentcrm-facebook-events') . '" />';
+                echo '</td>';
+                echo '<td><input type="text" class="small-text" name="' . $name_prefix . '[value]" value="' . esc_attr($mapping['value']) . '" /></td>';
+                echo '<td><input type="text" class="small-text" name="' . $name_prefix . '[currency]" value="' . esc_attr($mapping['currency']) . '" /></td>';
+                echo '<td><textarea name="' . $name_prefix . '[custom_params]" rows="3" cols="30" placeholder="{\"param\":\"value\"}">' . esc_textarea($mapping['custom_params']) . '</textarea></td>';
+                echo '<td class="fcrm-fb-events-actions">';
+                if ($index > 0) {
+                    echo '<button type="button" class="button-link fcrm-fb-events-remove-mapping">' . esc_html__('Remove', 'fluentcrm-facebook-events') . '</button>';
+                }
+                echo '</td>';
+                echo '</tr>';
+            }
+
+            $template_name_prefix = 'mappings[' . esc_attr($key) . '][__index__]';
+            echo '<tr class="fcrm-fb-events-template" data-trigger="' . esc_attr($key) . '" style="display:none;">';
+            echo '<td>' . esc_html($definition['label']) . '</td>';
             echo '<td>';
-            if (in_array($key, ['tag_applied', 'tag_removed'], true)) {
+            if ($definition['supports_tags']) {
                 if (empty($tags)) {
                     echo '<em>' . esc_html__('No tags available.', 'fluentcrm-facebook-events') . '</em>';
                 } else {
-                    echo '<select name="mappings[' . esc_attr($key) . '][tag_ids][]" multiple="multiple" size="4">';
+                    echo '<select name="' . $template_name_prefix . '[tag_ids][]" multiple="multiple" size="4">';
                     foreach ($tags as $tag) {
-                        $selected = in_array((int) $tag->id, (array) $mapping['tag_ids'], true);
-                        echo '<option value="' . esc_attr($tag->id) . '" ' . selected(true, $selected, false) . '>' . esc_html($tag->title) . '</option>';
+                        echo '<option value="' . esc_attr($tag->id) . '">' . esc_html($tag->title) . '</option>';
                     }
                     echo '</select>';
                     echo '<br /><span class="description">' . esc_html__('Select at least one tag to send this event.', 'fluentcrm-facebook-events') . '</span>';
@@ -665,25 +793,91 @@ class FCRM_FB_Events_Admin
                 echo '&mdash;';
             }
             echo '</td>';
-            echo '<td><input type="checkbox" name="mappings[' . esc_attr($key) . '][enabled]" value="1" ' . checked('yes', $mapping['enabled'], false) . ' /></td>';
-            echo '<td><select name="mappings[' . esc_attr($key) . '][event_name]">';
+            echo '<td><input type="checkbox" name="' . $template_name_prefix . '[enabled]" value="1" /></td>';
+            echo '<td><select name="' . $template_name_prefix . '[event_name]">';
             foreach ($event_options as $option) {
-                echo '<option value="' . esc_attr($option) . '" ' . selected($option, $mapping['event_name'], false) . '>' . esc_html($option) . '</option>';
+                echo '<option value="' . esc_attr($option) . '">' . esc_html($option) . '</option>';
             }
             echo '</select></td>';
             echo '<td>';
-            echo '<label><input type="checkbox" name="mappings[' . esc_attr($key) . '][send_custom_event]" value="1" ' . checked('yes', $mapping['send_custom_event'], false) . ' /> ' . esc_html__('Use custom event name', 'fluentcrm-facebook-events') . '</label><br />';
-            echo '<input type="text" class="regular-text" name="mappings[' . esc_attr($key) . '][custom_event_name]" value="' . esc_attr($mapping['custom_event_name']) . '" placeholder="' . esc_attr__('CustomEventName', 'fluentcrm-facebook-events') . '" />';
+            echo '<label><input type="checkbox" name="' . $template_name_prefix . '[send_custom_event]" value="1" /> ' . esc_html__('Use custom event name', 'fluentcrm-facebook-events') . '</label><br />';
+            echo '<input type="text" class="regular-text" name="' . $template_name_prefix . '[custom_event_name]" value="" placeholder="' . esc_attr__('CustomEventName', 'fluentcrm-facebook-events') . '" />';
             echo '</td>';
-            echo '<td><input type="text" class="small-text" name="mappings[' . esc_attr($key) . '][value]" value="' . esc_attr($mapping['value']) . '" /></td>';
-            echo '<td><input type="text" class="small-text" name="mappings[' . esc_attr($key) . '][currency]" value="' . esc_attr($mapping['currency']) . '" /></td>';
-            echo '<td><textarea name="mappings[' . esc_attr($key) . '][custom_params]" rows="3" cols="30" placeholder="{\"param\":\"value\"}">' . esc_textarea($mapping['custom_params']) . '</textarea></td>';
+            echo '<td><input type="text" class="small-text" name="' . $template_name_prefix . '[value]" value="" /></td>';
+            echo '<td><input type="text" class="small-text" name="' . $template_name_prefix . '[currency]" value="' . esc_attr($definition['defaults']['currency']) . '" /></td>';
+            echo '<td><textarea name="' . $template_name_prefix . '[custom_params]" rows="3" cols="30" placeholder="{\"param\":\"value\"}"></textarea></td>';
+            echo '<td class="fcrm-fb-events-actions">';
+            echo '<button type="button" class="button-link fcrm-fb-events-remove-mapping">' . esc_html__('Remove', 'fluentcrm-facebook-events') . '</button>';
+            echo '</td>';
+            echo '</tr>';
+
+            echo '<tr class="fcrm-fb-events-add-row">';
+            echo '<td colspan="9">';
+            echo '<button type="button" class="button fcrm-fb-events-add-mapping" data-trigger="' . esc_attr($key) . '">' . esc_html__('Add mapping', 'fluentcrm-facebook-events') . '</button>';
+            echo '</td>';
             echo '</tr>';
         }
 
         echo '</tbody></table>';
 
         submit_button(__('Save Settings', 'fluentcrm-facebook-events'));
+
+        echo '<script>
+            (function() {
+                function updateIndexes(trigger) {
+                    var rows = document.querySelectorAll("tr.fcrm-fb-events-mapping-row[data-trigger=\'" + trigger + "\']");
+                    rows.forEach(function(row, index) {
+                        row.querySelectorAll("input, select, textarea").forEach(function(field) {
+                            var name = field.getAttribute("name");
+                            if (!name) {
+                                return;
+                            }
+                            var pattern = new RegExp("mappings\\[" + trigger + "\\]\\[\\d+\\]", "g");
+                            field.setAttribute("name", name.replace(pattern, "mappings[" + trigger + "][" + index + "]"));
+                        });
+                    });
+                }
+
+                document.querySelectorAll(".fcrm-fb-events-add-mapping").forEach(function(button) {
+                    button.addEventListener("click", function() {
+                        var trigger = button.getAttribute("data-trigger");
+                        var template = document.querySelector("tr.fcrm-fb-events-template[data-trigger=\'" + trigger + "\']");
+                        if (!template) {
+                            return;
+                        }
+                        var clone = template.cloneNode(true);
+                        clone.style.display = "";
+                        clone.classList.remove("fcrm-fb-events-template");
+                        clone.classList.add("fcrm-fb-events-mapping-row");
+                        clone.querySelectorAll("input, select, textarea").forEach(function(field) {
+                            var name = field.getAttribute("name");
+                            if (!name) {
+                                return;
+                            }
+                            field.setAttribute("name", name.replace("__index__", "0"));
+                        });
+                        template.parentNode.insertBefore(clone, template);
+                        updateIndexes(trigger);
+                    });
+                });
+
+                document.addEventListener("click", function(event) {
+                    if (!event.target.classList.contains("fcrm-fb-events-remove-mapping")) {
+                        return;
+                    }
+                    event.preventDefault();
+                    var row = event.target.closest("tr");
+                    if (!row) {
+                        return;
+                    }
+                    var trigger = row.getAttribute("data-trigger");
+                    row.parentNode.removeChild(row);
+                    if (trigger) {
+                        updateIndexes(trigger);
+                    }
+                });
+            })();
+        </script>';
 
         echo '</form>';
 

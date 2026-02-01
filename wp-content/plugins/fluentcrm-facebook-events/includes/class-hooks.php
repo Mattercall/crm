@@ -41,7 +41,14 @@ class FCRM_FB_Events_Hooks
             return false;
         }
 
-        return !empty($settings['mappings'][$trigger]['enabled']) && $settings['mappings'][$trigger]['enabled'] === 'yes';
+        $mappings = $this->get_mappings_for_trigger($trigger);
+        foreach ($mappings as $mapping) {
+            if (!empty($mapping['enabled']) && $mapping['enabled'] === 'yes') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function handle_tags_added($subscriber, $tagIds)
@@ -127,7 +134,7 @@ class FCRM_FB_Events_Hooks
 
     private function handle_contact_event($trigger, $subscriber, array $context)
     {
-        if (!$this->should_process($trigger)) {
+        if (!$this->integration_enabled()) {
             return;
         }
 
@@ -135,32 +142,41 @@ class FCRM_FB_Events_Hooks
             return;
         }
 
-        if (in_array($trigger, ['tag_applied', 'tag_removed'], true) && !$this->tag_event_matches_selection($trigger, $context)) {
-            return;
-        }
-
         $action_time = current_time('timestamp', true);
-        $dedupe_key = md5($trigger . '|' . $subscriber->id . '|' . wp_json_encode($context) . '|' . $action_time);
-        if (isset($this->processed[$dedupe_key])) {
+        $mappings = $this->get_mappings_for_trigger($trigger);
+        if (empty($mappings)) {
             return;
         }
-        $this->processed[$dedupe_key] = true;
 
         $sender = new FCRM_FB_Events_Facebook_CAPI();
-        $payload = $sender->build_event_payload($trigger, $subscriber, $context, $action_time);
-
-        if (!$payload) {
-            return;
-        }
-
         $queue = new FCRM_FB_Events_Queue();
-        $queue->dispatch($payload, $trigger, $subscriber);
+
+        foreach ($mappings as $mapping) {
+            if (empty($mapping['enabled']) || $mapping['enabled'] !== 'yes') {
+                continue;
+            }
+
+            if (in_array($trigger, ['tag_applied', 'tag_removed'], true) && !$this->tag_event_matches_selection($mapping, $context)) {
+                continue;
+            }
+
+            $dedupe_key = md5($trigger . '|' . $subscriber->id . '|' . wp_json_encode($context) . '|' . $action_time . '|' . wp_json_encode($mapping));
+            if (isset($this->processed[$dedupe_key])) {
+                continue;
+            }
+            $this->processed[$dedupe_key] = true;
+
+            $payload = $sender->build_event_payload($trigger, $subscriber, $context, $action_time, $mapping);
+            if (!$payload) {
+                continue;
+            }
+
+            $queue->dispatch($payload, $trigger, $subscriber);
+        }
     }
 
-    private function tag_event_matches_selection($trigger, array $context)
+    private function tag_event_matches_selection(array $mapping, array $context)
     {
-        $settings = FCRM_FB_Events_Admin::get_settings();
-        $mapping = $settings['mappings'][$trigger] ?? [];
         $selected_tags = array_filter(array_map('absint', (array) ($mapping['tag_ids'] ?? [])));
         if (empty($selected_tags)) {
             return false;
@@ -172,5 +188,19 @@ class FCRM_FB_Events_Hooks
         }
 
         return (bool) array_intersect($selected_tags, $event_tags);
+    }
+
+    private function get_mappings_for_trigger($trigger)
+    {
+        $settings = FCRM_FB_Events_Admin::get_settings();
+        $mappings = $settings['mappings'][$trigger] ?? [];
+        if (!is_array($mappings)) {
+            return [];
+        }
+        if (isset($mappings['enabled']) || isset($mappings['event_name']) || isset($mappings['send_custom_event'])) {
+            return [$mappings];
+        }
+
+        return array_values($mappings);
     }
 }
