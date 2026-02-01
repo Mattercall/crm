@@ -8,10 +8,9 @@ class FCRM_FB_Events_Facebook_CAPI
 {
     const API_VERSION = 'v17.0';
 
-    public function build_event_payload($trigger, $subscriber, array $context, $action_time)
+    public function build_event_payload($trigger, $subscriber, array $context, $action_time, array $mapping)
     {
         $settings = FCRM_FB_Events_Admin::get_settings();
-        $mapping = $settings['mappings'][$trigger] ?? null;
 
         if (!$mapping || $mapping['enabled'] !== 'yes') {
             return null;
