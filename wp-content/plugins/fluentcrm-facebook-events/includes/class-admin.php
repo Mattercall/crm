@@ -265,8 +265,8 @@ class FCRM_FB_Events_Admin
             }
 
             $rows = [];
-            foreach ($map_input as $row) {
-                if (!is_array($row)) {
+            foreach ($map_input as $row_index => $row) {
+                if (!is_numeric($row_index) || !is_array($row)) {
                     continue;
                 }
                 $rows[] = $this->sanitize_mapping_row($key, $row, $definition['defaults']);
@@ -622,8 +622,8 @@ class FCRM_FB_Events_Admin
                 $raw = [$raw];
             }
             $rows = [];
-            foreach ($raw as $row) {
-                if (!is_array($row)) {
+            foreach ($raw as $row_index => $row) {
+                if (!is_numeric($row_index) || !is_array($row)) {
                     continue;
                 }
                 $rows[] = wp_parse_args($row, $definition['defaults']);
@@ -782,7 +782,7 @@ class FCRM_FB_Events_Admin
                 if (empty($tags)) {
                     echo '<em>' . esc_html__('No tags available.', 'fluentcrm-facebook-events') . '</em>';
                 } else {
-                    echo '<select name="' . $template_name_prefix . '[tag_ids][]" multiple="multiple" size="4">';
+                    echo '<select name="' . $template_name_prefix . '[tag_ids][]" multiple="multiple" size="4" disabled="disabled">';
                     foreach ($tags as $tag) {
                         echo '<option value="' . esc_attr($tag->id) . '">' . esc_html($tag->title) . '</option>';
                     }
@@ -793,19 +793,19 @@ class FCRM_FB_Events_Admin
                 echo '&mdash;';
             }
             echo '</td>';
-            echo '<td><input type="checkbox" name="' . $template_name_prefix . '[enabled]" value="1" /></td>';
-            echo '<td><select name="' . $template_name_prefix . '[event_name]">';
+            echo '<td><input type="checkbox" name="' . $template_name_prefix . '[enabled]" value="1" disabled="disabled" /></td>';
+            echo '<td><select name="' . $template_name_prefix . '[event_name]" disabled="disabled">';
             foreach ($event_options as $option) {
                 echo '<option value="' . esc_attr($option) . '">' . esc_html($option) . '</option>';
             }
             echo '</select></td>';
             echo '<td>';
-            echo '<label><input type="checkbox" name="' . $template_name_prefix . '[send_custom_event]" value="1" /> ' . esc_html__('Use custom event name', 'fluentcrm-facebook-events') . '</label><br />';
-            echo '<input type="text" class="regular-text" name="' . $template_name_prefix . '[custom_event_name]" value="" placeholder="' . esc_attr__('CustomEventName', 'fluentcrm-facebook-events') . '" />';
+            echo '<label><input type="checkbox" name="' . $template_name_prefix . '[send_custom_event]" value="1" disabled="disabled" /> ' . esc_html__('Use custom event name', 'fluentcrm-facebook-events') . '</label><br />';
+            echo '<input type="text" class="regular-text" name="' . $template_name_prefix . '[custom_event_name]" value="" placeholder="' . esc_attr__('CustomEventName', 'fluentcrm-facebook-events') . '" disabled="disabled" />';
             echo '</td>';
-            echo '<td><input type="text" class="small-text" name="' . $template_name_prefix . '[value]" value="" /></td>';
-            echo '<td><input type="text" class="small-text" name="' . $template_name_prefix . '[currency]" value="' . esc_attr($definition['defaults']['currency']) . '" /></td>';
-            echo '<td><textarea name="' . $template_name_prefix . '[custom_params]" rows="3" cols="30" placeholder="{\"param\":\"value\"}"></textarea></td>';
+            echo '<td><input type="text" class="small-text" name="' . $template_name_prefix . '[value]" value="" disabled="disabled" /></td>';
+            echo '<td><input type="text" class="small-text" name="' . $template_name_prefix . '[currency]" value="' . esc_attr($definition['defaults']['currency']) . '" disabled="disabled" /></td>';
+            echo '<td><textarea name="' . $template_name_prefix . '[custom_params]" rows="3" cols="30" placeholder="{\"param\":\"value\"}" disabled="disabled"></textarea></td>';
             echo '<td class="fcrm-fb-events-actions">';
             echo '<button type="button" class="button-link fcrm-fb-events-remove-mapping">' . esc_html__('Remove', 'fluentcrm-facebook-events') . '</button>';
             echo '</td>';
@@ -854,6 +854,7 @@ class FCRM_FB_Events_Admin
                             if (!name) {
                                 return;
                             }
+                            field.removeAttribute("disabled");
                             field.setAttribute("name", name.replace("__index__", "0"));
                         });
                         template.parentNode.insertBefore(clone, template);
