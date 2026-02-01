@@ -33,7 +33,8 @@ class FCRM_FB_Events_Facebook_CAPI
         $user_data = $this->build_user_data($subscriber);
         $custom_data = $this->build_custom_data($mapping, $context);
 
-        $event_id = md5($trigger . '|' . $subscriber->id . '|' . wp_json_encode($context) . '|' . $action_time);
+        $mapping_fingerprint = wp_json_encode($mapping);
+        $event_id = md5($trigger . '|' . $subscriber->id . '|' . wp_json_encode($context) . '|' . $action_time . '|' . $event_name . '|' . $mapping_fingerprint);
 
         $event = [
             'event_name' => $event_name,
