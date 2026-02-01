@@ -599,7 +599,10 @@ class AEUSD_Author_Earnings {
         );
 
         if ($status === 'approved') {
-            update_user_meta((int) $request->author_id, self::BALANCE_META, 0);
+            $current_balance = self::get_balance((int) $request->author_id);
+            $approved_amount = (float) $request->amount;
+            $new_balance = max(0, $current_balance - $approved_amount);
+            update_user_meta((int) $request->author_id, self::BALANCE_META, $new_balance);
             update_user_meta((int) $request->author_id, self::LAST_PAID_META, $reviewed_at);
         }
 
