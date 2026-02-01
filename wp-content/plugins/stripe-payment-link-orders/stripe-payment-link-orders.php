@@ -95,7 +95,11 @@ class SPPLO_Stripe_Payment_Link_Orders {
   public static function register_roles() {
     $role_caps = [
       'read' => true,
+      'edit_stripe_order' => true,
+      'read_stripe_order' => true,
       'edit_stripe_orders' => true,
+      'edit_others_stripe_orders' => true,
+      'edit_private_stripe_orders' => true,
       'read_private_stripe_orders' => true,
     ];
 
@@ -1244,6 +1248,10 @@ class SPPLO_Stripe_Payment_Link_Orders {
     $name       = get_post_meta($post->ID, '_spplo_customer_name', true);
     $email      = get_post_meta($post->ID, '_spplo_customer_email', true);
     $status     = get_post_meta($post->ID, '_spplo_payment_status', true);
+    $email_display = $email ?: '—';
+    if (!current_user_can(self::CAP_VIEW_FULL_EMAIL)) {
+      $email_display = self::mask_email($email_display);
+    }
 
     $amt = get_post_meta($post->ID, '_spplo_amount_total', true);
     $cur = get_post_meta($post->ID, '_spplo_currency', true);
@@ -1276,7 +1284,7 @@ class SPPLO_Stripe_Payment_Link_Orders {
     echo '<tr><th style="width:240px;">Order ID</th><td><code>' . esc_html($post->ID) . '</code></td></tr>';
     echo '<tr><th>Session ID</th><td><code>' . esc_html($session_id ?: '—') . '</code></td></tr>';
     echo '<tr><th>Customer</th><td>' . esc_html($name ?: '—') . '</td></tr>';
-    echo '<tr><th>Email</th><td>' . esc_html($email ?: '—') . '</td></tr>';
+    echo '<tr><th>Email</th><td>' . esc_html($email_display) . '</td></tr>';
     echo '<tr><th>Payment Status</th><td>' . esc_html($status ?: '—') . '</td></tr>';
     echo '<tr><th>Amount</th><td>' . esc_html($amount_display) . '</td></tr>';
     echo '<tr><th>Email Sent</th><td>' . esc_html($sent_at ? 'Yes (' . $sent_at . ')' : 'No') . ($mail_err ? ' — <code>' . esc_html($mail_err) . '</code>' : '') . '</td></tr>';
@@ -1411,6 +1419,10 @@ class SPPLO_Stripe_Payment_Link_Orders {
     }
 
     $email = get_post_meta($post->ID, '_spplo_customer_email', true);
+    $email_display = $email ?: '—';
+    if (!current_user_can(self::CAP_VIEW_FULL_EMAIL)) {
+      $email_display = self::mask_email($email_display);
+    }
     $default_subject = get_option(self::OPT_EMAIL_SUBJECT, 'Your links for Order #{order_id}');
     $default_subject = str_replace('{order_id}', (string)$post->ID, (string)$default_subject);
 
@@ -1420,7 +1432,7 @@ class SPPLO_Stripe_Payment_Link_Orders {
     echo '<input type="hidden" name="action" value="spplo_send_order_email" form="' . esc_attr($form_id) . '" />';
     echo '<input type="hidden" name="post_id" value="' . esc_attr((string)$post->ID) . '" form="' . esc_attr($form_id) . '" />';
 
-    echo '<p><strong>Customer Email:</strong><br>' . esc_html($email ?: '—') . '</p>';
+    echo '<p><strong>Customer Email:</strong><br>' . esc_html($email_display) . '</p>';
     echo '<p>';
     echo '<button type="submit" name="spplo_send_action" value="resend" class="button button-secondary" form="' . esc_attr($form_id) . '" formmethod="post" formaction="' . esc_url(admin_url('admin-post.php')) . '">';
     echo esc_html__('Resend Download Email', 'spplo');
