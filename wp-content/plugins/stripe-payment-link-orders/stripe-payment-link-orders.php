@@ -33,12 +33,15 @@ class SPPLO_Stripe_Payment_Link_Orders {
   const CPT = 'stripe_order';
   const META_EMAIL_AUDIT_LOG = '_spplo_email_audit_log';
   const META_LAST_EMAIL_HASH = '_spplo_last_email_hash';
+  const ROLE_ORDER_MANAGER = 'order-manager';
+  const CAP_VIEW_FULL_EMAIL = 'spplo_view_full_order_emails';
 
   const EMAIL_RATE_LIMIT_SECONDS = 60;
   const EMAIL_DUPLICATE_SECONDS = 600;
 
   public static function init() {
     add_action('init', [__CLASS__, 'register_cpt']);
+    add_action('init', [__CLASS__, 'register_roles']);
     add_action('admin_menu', [__CLASS__, 'admin_menu']);
     add_action('admin_init', [__CLASS__, 'register_settings']);
 
@@ -68,9 +71,78 @@ class SPPLO_Stripe_Payment_Link_Orders {
       'show_in_menu'        => true,
       'menu_icon'           => 'dashicons-cart',
       'supports'            => ['title'],
-      'capability_type'     => 'post',
+      'capability_type'     => ['stripe_order', 'stripe_orders'],
+      'capabilities'        => [
+        'edit_post'              => 'edit_stripe_order',
+        'read_post'              => 'read_stripe_order',
+        'delete_post'            => 'delete_stripe_order',
+        'edit_posts'             => 'edit_stripe_orders',
+        'edit_others_posts'      => 'edit_others_stripe_orders',
+        'publish_posts'          => 'publish_stripe_orders',
+        'read_private_posts'     => 'read_private_stripe_orders',
+        'delete_posts'           => 'delete_stripe_orders',
+        'delete_private_posts'   => 'delete_private_stripe_orders',
+        'delete_published_posts' => 'delete_published_stripe_orders',
+        'delete_others_posts'    => 'delete_others_stripe_orders',
+        'edit_private_posts'     => 'edit_private_stripe_orders',
+        'edit_published_posts'   => 'edit_published_stripe_orders',
+      ],
+      'map_meta_cap'        => true,
       'show_in_rest'        => false,
     ]);
+  }
+
+  public static function register_roles() {
+    $role_caps = [
+      'read' => true,
+      'edit_stripe_orders' => true,
+      'read_private_stripe_orders' => true,
+    ];
+
+    $role = get_role(self::ROLE_ORDER_MANAGER);
+    if (!$role) {
+      $role = add_role(self::ROLE_ORDER_MANAGER, 'Order Manager', $role_caps);
+    }
+
+    if ($role) {
+      foreach ($role_caps as $cap => $grant) {
+        if ($grant) {
+          $role->add_cap($cap);
+        } else {
+          $role->remove_cap($cap);
+        }
+      }
+    }
+
+    self::add_admin_caps();
+  }
+
+  private static function add_admin_caps() {
+    $admin = get_role('administrator');
+    if (!$admin) {
+      return;
+    }
+
+    $admin_caps = [
+      'edit_stripe_order',
+      'read_stripe_order',
+      'delete_stripe_order',
+      'edit_stripe_orders',
+      'edit_others_stripe_orders',
+      'publish_stripe_orders',
+      'read_private_stripe_orders',
+      'delete_stripe_orders',
+      'delete_private_stripe_orders',
+      'delete_published_stripe_orders',
+      'delete_others_stripe_orders',
+      'edit_private_stripe_orders',
+      'edit_published_stripe_orders',
+      self::CAP_VIEW_FULL_EMAIL,
+    ];
+
+    foreach ($admin_caps as $cap) {
+      $admin->add_cap($cap);
+    }
   }
 
   public static function admin_menu() {
@@ -1092,6 +1164,14 @@ class SPPLO_Stripe_Payment_Link_Orders {
     return $name === '' ? get_bloginfo('name') : $name;
   }
 
+  private static function mask_email($email) {
+    $email = (string)$email;
+    if ($email === '' || !is_email($email)) {
+      return '****';
+    }
+    return '****@****.***';
+  }
+
   public static function columns($cols) {
     $new = [];
     $new['cb']            = $cols['cb'] ?? '';
@@ -1106,7 +1186,12 @@ class SPPLO_Stripe_Payment_Link_Orders {
 
   public static function column_content($col, $post_id) {
     if ($col === 'spplo_email') {
-      echo esc_html(get_post_meta($post_id, '_spplo_customer_email', true));
+      $email = get_post_meta($post_id, '_spplo_customer_email', true);
+      if (!current_user_can(self::CAP_VIEW_FULL_EMAIL)) {
+        echo esc_html(self::mask_email($email));
+        return;
+      }
+      echo esc_html($email);
       return;
     }
     if ($col === 'spplo_amount') {
@@ -1602,3 +1687,5 @@ class SPPLO_Stripe_Payment_Link_Orders {
 }
 
 SPPLO_Stripe_Payment_Link_Orders::init();
+
+register_activation_hook(__FILE__, ['SPPLO_Stripe_Payment_Link_Orders', 'register_roles']);
