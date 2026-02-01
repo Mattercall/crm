@@ -1502,10 +1502,6 @@ class SPPLO_Stripe_Payment_Link_Orders {
   }
 
   public static function handle_admin_send_order_email() {
-    if (!current_user_can('edit_posts')) {
-      wp_die(esc_html__('You are not allowed to send emails.', 'spplo'));
-    }
-
     $post_id = isset($_POST['post_id']) ? absint($_POST['post_id']) : 0;
     if (!$post_id || get_post_type($post_id) !== self::CPT) {
       wp_die(esc_html__('Invalid order.', 'spplo'));
