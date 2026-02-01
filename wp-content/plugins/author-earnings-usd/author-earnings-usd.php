@@ -16,6 +16,7 @@ class AEUSD_Author_Earnings {
     const LAST_PAID_META     = 'aeusd_last_paid_at';
     const OPT_RATE       = 'aeusd_rate';                // option
     const OPT_TYPES      = 'aeusd_enabled_post_types';  // option
+    const OPT_MIN_WITHDRAW = 'aeusd_min_withdraw_usd';  // option
 
     public static function init() {
         add_action('admin_init', [__CLASS__, 'register_settings']);
@@ -53,6 +54,12 @@ class AEUSD_Author_Earnings {
             'sanitize_callback' => [__CLASS__, 'sanitize_types'],
             'default'           => ['post'],
         ]);
+
+        register_setting('aeusd_settings', self::OPT_MIN_WITHDRAW, [
+            'type'              => 'number',
+            'sanitize_callback' => [__CLASS__, 'sanitize_rate'],
+            'default'           => 0,
+        ]);
     }
 
     public static function sanitize_rate($value) {
@@ -75,6 +82,11 @@ class AEUSD_Author_Earnings {
     private static function get_rate(): float {
         $rate = get_option(self::OPT_RATE, 0.15);
         return is_numeric($rate) ? (float)$rate : 0.0;
+    }
+
+    private static function get_min_withdraw(): float {
+        $amount = get_option(self::OPT_MIN_WITHDRAW, 0);
+        return is_numeric($amount) ? (float)$amount : 0.0;
     }
 
     private static function get_enabled_types(): array {
@@ -137,6 +149,7 @@ class AEUSD_Author_Earnings {
         if (!current_user_can('manage_options')) wp_die('Not allowed');
 
         $rate  = self::get_rate();
+        $min_withdraw = self::get_min_withdraw();
         $types = self::get_enabled_types();
         $catalog = self::get_rewardable_post_types();
 
@@ -150,6 +163,11 @@ class AEUSD_Author_Earnings {
         echo '<tr><th scope="row"><label for="aeusd_rate">Rate per first publish (USD)</label></th><td>';
         echo '<input name="' . esc_attr(self::OPT_RATE) . '" id="aeusd_rate" type="number" step="0.01" min="0" value="' . esc_attr(number_format($rate, 2, '.', '')) . '" />';
         echo '<p class="description">Example: 0.15 means $0.15 each time content is published for the first time.</p>';
+        echo '</td></tr>';
+
+        echo '<tr><th scope="row"><label for="aeusd_min_withdraw">Minimum withdraw amount (USD)</label></th><td>';
+        echo '<input name="' . esc_attr(self::OPT_MIN_WITHDRAW) . '" id="aeusd_min_withdraw" type="number" step="0.01" min="0" value="' . esc_attr(number_format($min_withdraw, 2, '.', '')) . '" />';
+        echo '<p class="description">Authors must reach this balance before they can submit a payment request.</p>';
         echo '</td></tr>';
 
         echo '<tr><th scope="row">Post types that earn money</th><td>';
@@ -335,6 +353,7 @@ class AEUSD_Author_Earnings {
 
         $balance = self::get_balance($user_id);
         $rate    = self::get_rate();
+        $min_withdraw = self::get_min_withdraw();
         $pending = self::get_pending_request($user_id);
 
         echo '<p><strong>Current balance:</strong> ' . esc_html(self::format_usd($balance)) . '</p>';
@@ -342,6 +361,13 @@ class AEUSD_Author_Earnings {
             echo '<p><strong>Payment request:</strong> Pending approval for ' . esc_html(self::format_usd((float) $pending->amount)) . '</p>';
         }
         echo '<p><strong>Rate:</strong> ' . esc_html(self::format_usd($rate)) . ' per first-time publish (eligible post types set by admin).</p>';
+        if ($min_withdraw > 0) {
+            echo '<p><strong>Minimum withdraw:</strong> ' . esc_html(self::format_usd($min_withdraw)) . '</p>';
+            if ($balance < $min_withdraw) {
+                $remaining = max(0, $min_withdraw - $balance);
+                echo '<p><strong>To request payment:</strong> Earn ' . esc_html(self::format_usd($remaining)) . ' more.</p>';
+            }
+        }
         echo '<p><a class="button button-secondary" href="' . esc_url(admin_url('admin.php?page=aeusd-earnings')) . '">View earnings &amp; requests</a></p>';
     }
 
@@ -372,6 +398,7 @@ class AEUSD_Author_Earnings {
 
         $balance = self::get_balance($user_id);
         $rate    = self::get_rate();
+        $min_withdraw = self::get_min_withdraw();
         $types   = self::get_enabled_types();
         $pending = self::get_pending_request($user_id);
         $history = self::get_user_requests($user_id);
@@ -381,6 +408,9 @@ class AEUSD_Author_Earnings {
         echo '<p><strong>Current payable balance:</strong> ' . esc_html(self::format_usd($balance)) . '</p>';
         echo '<p><strong>Rate:</strong> ' . esc_html(self::format_usd($rate)) . ' per first-time publish.</p>';
         echo '<p><strong>Eligible post types:</strong> ' . esc_html(implode(', ', $types)) . '</p>';
+        if ($min_withdraw > 0) {
+            echo '<p><strong>Minimum withdraw amount:</strong> ' . esc_html(self::format_usd($min_withdraw)) . '</p>';
+        }
 
         echo '<hr />';
         echo '<h2>Request payment</h2>';
@@ -388,6 +418,9 @@ class AEUSD_Author_Earnings {
             echo '<p><strong>Status:</strong> Pending approval for ' . esc_html(self::format_usd((float) $pending->amount)) . ' (requested ' . esc_html(self::format_datetime($pending->created_at)) . ')</p>';
         } elseif ($balance <= 0) {
             echo '<p>You have no payable balance available.</p>';
+        } elseif ($min_withdraw > 0 && $balance < $min_withdraw) {
+            $remaining = max(0, $min_withdraw - $balance);
+            echo '<p>You need to earn <strong>' . esc_html(self::format_usd($remaining)) . '</strong> more to reach the minimum withdraw amount of ' . esc_html(self::format_usd($min_withdraw)) . '.</p>';
         } else {
             echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
             wp_nonce_field('aeusd_submit_request', 'aeusd_nonce');
@@ -530,8 +563,14 @@ class AEUSD_Author_Earnings {
         }
 
         $balance = self::get_balance($user_id);
+        $min_withdraw = self::get_min_withdraw();
         if ($balance <= 0) {
             wp_safe_redirect(admin_url('admin.php?page=aeusd-earnings&aeusd=empty'));
+            exit;
+        }
+
+        if ($min_withdraw > 0 && $balance < $min_withdraw) {
+            wp_safe_redirect(admin_url('admin.php?page=aeusd-earnings&aeusd=minimum'));
             exit;
         }
 
